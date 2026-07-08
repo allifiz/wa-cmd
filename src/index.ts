@@ -14,8 +14,10 @@ type ChatItem = { jid: string; name: string; lastMessage: string; lastAt: number
 type StoredMessage = { jid: string; fromMe: boolean; senderName: string; text: string; at: number };
 type ContactItem = { jid: string; name: string; notify?: string; verifiedName?: string; updatedAt: number };
 type AliasStore = Record<string, string>;
+type SettingsStore = { viewOnceForwardJid?: string };
 type MediaKind = 'image' | 'view-once-image';
 type MediaItem = { id: number; jid: string; kind: MediaKind; filePath: string; caption?: string; fromMe: boolean; senderName: string; at: number };
+type MediaSaveResult = { text: string; item?: MediaItem };
 type ListItem = { jid: string; name: string; subtitle: string; source: 'chat' | 'contact' };
 type Mode = 'inbox' | 'chat' | 'contacts' | 'search';
 
@@ -30,6 +32,7 @@ const FILES = {
   chats: path.join(DATA, 'chats.json'),
   messages: path.join(DATA, 'messages.json'),
   media: path.join(DATA, 'media.json'),
+  settings: path.join(DATA, 'settings.json'),
 };
 const PAGE_SIZE = 10;
 const MAX_MSG = 80;
@@ -40,6 +43,7 @@ const contacts = new Map<string, ContactItem>();
 const messages = new Map<string, StoredMessage[]>();
 const media = new Map<number, MediaItem>();
 let aliases: AliasStore = {};
+let settings: SettingsStore = {};
 let nextMediaId = 1;
 let mode: Mode = 'inbox';
 let page = 0;
@@ -92,6 +96,7 @@ function dedupeMessageList(list: StoredMessage[]): StoredMessage[] {
 
 function loadData(): void {
   aliases = readJson<AliasStore>(FILES.aliases, {});
+  settings = readJson<SettingsStore>(FILES.settings, {});
   for (const c of Object.values(readJson<Record<string, ContactItem>>(FILES.contacts, {}))) if (c.jid) contacts.set(c.jid, c);
   for (const c of Object.values(readJson<Record<string, ChatItem>>(FILES.chats, {}))) if (c.jid) chats.set(c.jid, c);
   for (const [jid, list] of Object.entries(readJson<Record<string, StoredMessage[]>>(FILES.messages, {}))) messages.set(jid, dedupeMessageList(list));
@@ -101,6 +106,7 @@ function loadData(): void {
 
 function saveData(): void {
   writeJson(FILES.aliases, aliases);
+  writeJson(FILES.settings, settings);
   writeJson(FILES.contacts, Object.fromEntries(contacts));
   writeJson(FILES.chats, Object.fromEntries(chats));
   writeJson(FILES.messages, Object.fromEntries([...messages.entries()].map(([jid, list]) => [jid, dedupeMessageList(list)])));
@@ -219,7 +225,7 @@ function addMedia(item: Omit<MediaItem, 'id'>): MediaItem {
   return full;
 }
 
-async function saveIncomingImage(sock: ReturnType<typeof makeWASocket>, rawMessage: any, jid: string, fromMe: boolean, senderName: string, at: number): Promise<string | null> {
+async function saveIncomingImage(sock: ReturnType<typeof makeWASocket>, rawMessage: any, jid: string, fromMe: boolean, senderName: string, at: number): Promise<MediaSaveResult | null> {
   const info = getImageMessage(rawMessage.message);
   if (!info) return null;
   try {
@@ -234,9 +240,9 @@ async function saveIncomingImage(sock: ReturnType<typeof makeWASocket>, rawMessa
     const item = addMedia({ jid, kind, filePath, caption: info.caption, fromMe, senderName, at });
     const label = info.once ? `view-once image #v${item.id}` : `image #${item.id}`;
     const caption = info.caption ? ` ${info.caption}` : '';
-    return `[${label}]${caption}`;
+    return { text: `[${label}]${caption}`, item };
   } catch {
-    return info.once ? '[view-once image: gagal download]' : '[image: gagal download]';
+    return { text: info.once ? '[view-once image: gagal download]' : '[image: gagal download]' };
   }
 }
 
@@ -275,7 +281,7 @@ function pageItems(): ListItem[] { return activeList.slice(page * PAGE_SIZE, pag
 function renderHeader(): void {
   console.clear();
   console.log(chalk.cyan.bold('WA CMD'));
-  console.log(chalk.gray('1-10 open | n/p page | s <nama> search | c <nama> contacts | r <no> <pesan> | v <media-id> | b back | /help'));
+  console.log(chalk.gray('1-10 open | n/p page | s <nama> search | c <nama> contacts | r <no> <pesan> | v <media-id> | /vo | b back | /help'));
   console.log('');
 }
 function renderList(): void {
@@ -296,7 +302,7 @@ function renderChat(): void {
   const ch = chats.get(currentChat);
   if (ch) chats.set(currentChat, { ...ch, unread: 0 });
   console.log(chalk.cyan.bold(`Chat: ${nameOf(currentChat)}`));
-  console.log(chalk.gray('Ketik pesan langsung. b/back kembali. v <media-id> buka foto.'));
+  console.log(chalk.gray('Ketik pesan langsung. b/back kembali. v <media-id> buka foto. /vo untuk anti-viewonce.'));
   console.log('');
   const list = dedupeMessageList(messages.get(currentChat) ?? []).slice(-30);
   if (!list.length) console.log(chalk.gray('Belum ada pesan lokal untuk chat ini.'));
@@ -347,19 +353,28 @@ ${chalk.cyan.bold('Shortcut')}
 ${chalk.cyan.bold('Slash command')}
   /chats | /contacts [nama] | /search <kata> | /open <target>
   /send <target> <pesan> | /alias <target> <alias> | /aliases
-  /view <media-id> | /clear | /logout | /exit
+  /view <media-id> | /viewonce status | /viewonce set <target>
+  /viewonce off | /viewonce list | /viewonce open <id>
+  /clear | /logout | /exit
 `);
 }
 function printAliases(): void { Object.entries(aliases).forEach(([a, j]) => console.log(`${chalk.cyan(`@${a}`)} -> ${nameOf(j)} ${chalk.gray(j)}`)); }
 
+function openPath(filePath: string): void {
+  const resolved = path.resolve(filePath);
+  const command = process.platform === 'win32' ? 'cmd' : process.platform === 'darwin' ? 'open' : 'xdg-open';
+  const args = process.platform === 'win32' ? ['/c', 'start', '', resolved] : [resolved];
+  spawn(command, args, { detached: true, stdio: 'ignore' }).unref();
+}
+
 function openMedia(idRaw: string): void {
-  const cleaned = idRaw.trim().replace(/^v/i, '');
+  const cleaned = idRaw.trim().replace(/^#?v/i, '');
   const id = Number(cleaned);
   if (!Number.isInteger(id)) throw new Error('Format: v <media-id>, contoh v1, v 7, vv12, atau v v12');
   const item = media.get(id);
   if (!item) throw new Error(`Media #${id} tidak ketemu.`);
   if (!fs.existsSync(item.filePath)) throw new Error(`File media #${id} tidak ada di disk: ${item.filePath}`);
-  spawn('cmd', ['/c', 'start', '', path.resolve(item.filePath)], { detached: true, stdio: 'ignore' }).unref();
+  openPath(item.filePath);
   console.log(chalk.green(`open media #${item.kind === 'view-once-image' ? `v${id}` : id}: ${item.filePath}`));
 }
 
@@ -371,6 +386,71 @@ async function sendText(sock: ReturnType<typeof makeWASocket>, jid: string, text
   pushMsg({ jid, fromMe: true, senderName: 'kamu', text, at });
   saveData();
   console.log(chalk.green('sent ✓'));
+}
+
+async function forwardViewOnceIfEnabled(sock: ReturnType<typeof makeWASocket>, item?: MediaItem): Promise<void> {
+  if (!item || item.kind !== 'view-once-image') return;
+  const target = settings.viewOnceForwardJid;
+  if (!target) return;
+  if (!fs.existsSync(item.filePath)) return;
+
+  await sock.sendMessage(target, {
+    image: fs.readFileSync(item.filePath),
+    caption: item.caption ? `View-once dari ${nameOf(item.jid)}:\n${item.caption}` : `View-once dari ${nameOf(item.jid)}`,
+  });
+
+  const label = `[forwarded view-once #v${item.id}] ke ${nameOf(target)}`;
+  const at = Date.now();
+  upsertChat(target, nameOf(target), label, true, at);
+  pushMsg({ jid: target, fromMe: true, senderName: 'kamu', text: label, at });
+  console.log(chalk.green(`anti-viewonce: forwarded to ${nameOf(target)} ✓`));
+}
+
+function viewOnceStatus(): void {
+  const target = settings.viewOnceForwardJid;
+  const count = [...media.values()].filter((x) => x.kind === 'view-once-image').length;
+  if (target) {
+    console.log(chalk.green(`Anti-viewonce aktif. Auto-forward target: ${nameOf(target)} ${chalk.gray(target)}. Tersimpan sesi ini: ${count}.`));
+    return;
+  }
+  console.log(chalk.yellow(`Anti-viewonce aktif untuk simpan lokal, auto-forward off. Tersimpan sesi ini: ${count}.`));
+}
+
+function listViewOnce(): void {
+  const items = [...media.values()].filter((x) => x.kind === 'view-once-image').sort((a, b) => b.at - a.at);
+  if (!items.length) {
+    console.log(chalk.yellow('Belum ada view-once tersimpan. Fitur hanya menangkap view-once yang masuk saat wa-cmd aktif.'));
+    return;
+  }
+  for (const item of items.slice(0, 20)) {
+    console.log(`${chalk.cyan(`#v${item.id}`)} ${time(item.at)} ${nameOf(item.jid)} ${chalk.gray(item.caption ?? '')}`);
+  }
+}
+
+function viewOnceCommand(args: string[]): void {
+  const sub = args.shift()?.toLowerCase() ?? 'status';
+
+  if (sub === 'status') return viewOnceStatus();
+  if (sub === 'list') return listViewOnce();
+  if (sub === 'open' || sub === 'view') return openMedia(args[0] ?? '');
+
+  if (sub === 'set') {
+    const target = args.join(' ');
+    if (!target) throw new Error('Format: /viewonce set <target>');
+    settings.viewOnceForwardJid = resolveTarget(target);
+    saveData();
+    console.log(chalk.green(`Auto-forward view-once diset ke ${nameOf(settings.viewOnceForwardJid)}.`));
+    return;
+  }
+
+  if (sub === 'off' || sub === 'disable') {
+    delete settings.viewOnceForwardJid;
+    saveData();
+    console.log(chalk.yellow('Auto-forward view-once dimatikan. View-once tetap disimpan lokal selama app hidup.'));
+    return;
+  }
+
+  throw new Error('Format: /viewonce status | set <target> | off | list | open <id>');
 }
 
 async function slash(sock: ReturnType<typeof makeWASocket>, line: string): Promise<void> {
@@ -385,6 +465,7 @@ async function slash(sock: ReturnType<typeof makeWASocket>, line: string): Promi
   if (cmd === '/alias') { const target = args.shift(); const alias = args.shift()?.toLowerCase(); if (!target || !alias) throw new Error('Format: /alias <target> <alias>'); aliases[alias] = resolveTarget(target); saveData(); console.log(chalk.green(`Alias @${alias} disimpan.`)); return; }
   if (cmd === '/aliases') return printAliases();
   if (cmd === '/view') return openMedia(args[0] ?? '');
+  if (cmd === '/viewonce' || cmd === '/vo') return viewOnceCommand(args);
   if (cmd === '/clear') return render();
   if (cmd === '/logout') { cleanupViewOnceFiles(); fs.rmSync(AUTH, { recursive: true, force: true }); console.log(chalk.yellow('Session lokal dihapus. Jalankan ulang untuk scan QR.')); process.exit(0); }
   if (cmd === '/exit' || cmd === '/quit') exitApp(0);
@@ -402,6 +483,8 @@ async function shortcut(sock: ReturnType<typeof makeWASocket>, line: string): Pr
   if (lower === 'c' || lower.startsWith('c ')) return setMode('contacts', line.slice(1).trim());
   if (lower.startsWith('r ')) { const [, idx, ...msg] = line.split(' '); const jid = resolveIndex(idx); if (!jid || !msg.join(' ')) throw new Error('Format: r <no> <pesan>'); return sendText(sock, jid, msg.join(' ')); }
   if (lower.startsWith('v ') || /^vv?\d+$/.test(lower)) return openMedia(lower.startsWith('v ') ? line.slice(1).trim() : line);
+  if (lower === 'vo') return viewOnceStatus();
+  if (lower.startsWith('vo ')) return viewOnceCommand(line.slice(2).trim().split(/\s+/).filter(Boolean));
   if (line.startsWith('@')) { const [target, ...msg] = line.split(' '); if (!msg.join(' ')) throw new Error('Format: @alias <pesan>'); return sendText(sock, resolveTarget(target), msg.join(' ')); }
   if (mode === 'chat' && currentChat) return sendText(sock, currentChat, line);
   console.log(chalk.yellow('Tidak paham. Ketik /help.'));
@@ -445,8 +528,9 @@ async function connect(): Promise<void> {
       const at = Number(m.messageTimestamp ?? Math.floor(Date.now() / 1000)) * 1000;
       const senderName = fromMe ? 'kamu' : m.pushName || nameOf(jid);
       const chatName = fromMe ? nameOf(jid) : m.pushName || nameOf(jid);
-      const mediaText = await saveIncomingImage(sock, m as any, jid, fromMe, senderName, at);
-      const text = mediaText ?? textOf(m.message);
+      const mediaResult = await saveIncomingImage(sock, m as any, jid, fromMe, senderName, at);
+      if (!fromMe) await forwardViewOnceIfEnabled(sock, mediaResult?.item);
+      const text = mediaResult?.text ?? textOf(m.message);
       if (!text) continue;
       upsertChat(jid, chatName, text, fromMe, at);
       pushMsg({ jid, fromMe, senderName, text, at });
