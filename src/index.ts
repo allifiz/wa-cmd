@@ -133,12 +133,13 @@ function phoneToJid(s: string): string {
 function unwrapMessage(m?: proto.IMessage | null): proto.IMessage | null {
   if (!m) return null;
   const anyMsg = m as any;
-  return anyMsg.ephemeralMessage?.message
+  const inner = anyMsg.ephemeralMessage?.message
     ?? anyMsg.viewOnceMessage?.message
     ?? anyMsg.viewOnceMessageV2?.message
     ?? anyMsg.viewOnceMessageV2Extension?.message
     ?? anyMsg.documentWithCaptionMessage?.message
-    ?? m;
+    ?? null;
+  return inner && inner !== m ? unwrapMessage(inner) : m;
 }
 
 function hasViewOnceWrapper(m?: proto.IMessage | null): boolean {
