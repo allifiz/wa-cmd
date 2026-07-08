@@ -127,8 +127,9 @@ function upsertContact(jid: string, name?: string | null, notify?: string | null
 
 function upsertChat(jid: string, name: string, msg: string, fromMe: boolean, at: number): void {
   const old = chats.get(jid);
-  upsertContact(jid, name);
-  chats.set(jid, { jid, name: old?.name && old.name !== jid ? old.name : name, lastMessage: msg, lastAt: at, unread: fromMe || currentChat === jid ? 0 : (old?.unread ?? 0) + 1 });
+  if (!fromMe) upsertContact(jid, name);
+  const safeName = fromMe ? (contactName(jid) ?? old?.name ?? jid) : name;
+  chats.set(jid, { jid, name: old?.name && old.name !== jid ? old.name : safeName, lastMessage: msg, lastAt: at, unread: fromMe || currentChat === jid ? 0 : (old?.unread ?? 0) + 1 });
 }
 
 function pushMsg(m: StoredMessage): void {
@@ -305,7 +306,7 @@ async function connect(): Promise<void> {
   if (!fs.existsSync(AUTH)) fs.mkdirSync(AUTH, { recursive: true });
   const { state, saveCreds } = await useMultiFileAuthState(AUTH);
   const { version } = await fetchLatestBaileysVersion();
-  const sock = makeWASocket({ auth: state, version, logger, printQRInTerminal: false, browser: ['WA CMD', 'Chrome', '0.3.1'], markOnlineOnConnect: false, syncFullHistory: false });
+  const sock = makeWASocket({ auth: state, version, logger, printQRInTerminal: false, browser: ['WA CMD', 'Chrome', '0.3.2'], markOnlineOnConnect: false, syncFullHistory: false });
 
   sock.ev.on('creds.update', saveCreds);
   sock.ev.on('contacts.upsert', (items: unknown[]) => { for (const raw of items) { const x = raw as { id?: string; jid?: string; name?: string; notify?: string; verifiedName?: string }; const jid = x.id ?? x.jid; if (jid) upsertContact(jid, x.name, x.notify, x.verifiedName); } saveData(); });
@@ -328,7 +329,8 @@ async function connect(): Promise<void> {
       const fromMe = Boolean(m.key.fromMe);
       const at = Number(m.messageTimestamp ?? Math.floor(Date.now() / 1000)) * 1000;
       const senderName = fromMe ? 'kamu' : m.pushName || nameOf(jid);
-      upsertChat(jid, m.pushName || nameOf(jid), text, fromMe, at);
+      const chatName = fromMe ? nameOf(jid) : m.pushName || nameOf(jid);
+      upsertChat(jid, chatName, text, fromMe, at);
       pushMsg({ jid, fromMe, senderName, text, at });
       changed = true;
       if (!fromMe && mode !== 'chat') console.log(`\n${chalk.cyan('new')} ${chalk.bold(nameOf(jid))} ${chalk.gray(time(at))}: ${text}`);
