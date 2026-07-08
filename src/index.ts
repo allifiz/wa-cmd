@@ -130,14 +130,30 @@ function unwrapMessage(m?: proto.IMessage | null): proto.IMessage | null {
   return anyMsg.ephemeralMessage?.message
     ?? anyMsg.viewOnceMessage?.message
     ?? anyMsg.viewOnceMessageV2?.message
+    ?? anyMsg.viewOnceMessageV2Extension?.message
     ?? anyMsg.documentWithCaptionMessage?.message
     ?? m;
 }
 
+function hasViewOnceWrapper(m?: proto.IMessage | null): boolean {
+  if (!m) return false;
+  const anyMsg = m as any;
+  if (anyMsg.viewOnceMessage || anyMsg.viewOnceMessageV2 || anyMsg.viewOnceMessageV2Extension) return true;
+  const inner = anyMsg.ephemeralMessage?.message ?? anyMsg.documentWithCaptionMessage?.message;
+  return inner && inner !== m ? hasViewOnceWrapper(inner) : false;
+}
+
 function isViewOnce(raw?: proto.IMessage | null): boolean {
   if (!raw) return false;
-  const anyMsg = raw as any;
-  return Boolean(anyMsg.viewOnceMessage || anyMsg.viewOnceMessageV2 || anyMsg.imageMessage?.viewOnce || anyMsg.videoMessage?.viewOnce);
+  const anyRaw = raw as any;
+  const m = unwrapMessage(raw) as any;
+  return Boolean(
+    hasViewOnceWrapper(raw)
+    || anyRaw.imageMessage?.viewOnce
+    || anyRaw.videoMessage?.viewOnce
+    || m?.imageMessage?.viewOnce
+    || m?.videoMessage?.viewOnce
+  );
 }
 
 function textOf(raw?: proto.IMessage | null): string {
@@ -325,7 +341,7 @@ ${chalk.cyan.bold('Shortcut')}
   s <kata>              search chat + kontak
   c <kata>              filter contacts
   r <no> <pesan>        quick reply
-  v <media-id>          buka foto. Contoh: v 7 atau v v12
+  v <media-id>          buka foto. Contoh: v1, v 7, vv12, atau v v12
   @alias <pesan>        quick send
 
 ${chalk.cyan.bold('Slash command')}
@@ -339,7 +355,7 @@ function printAliases(): void { Object.entries(aliases).forEach(([a, j]) => cons
 function openMedia(idRaw: string): void {
   const cleaned = idRaw.trim().replace(/^v/i, '');
   const id = Number(cleaned);
-  if (!Number.isInteger(id)) throw new Error('Format: v <media-id>, contoh v 7 atau v v12');
+  if (!Number.isInteger(id)) throw new Error('Format: v <media-id>, contoh v1, v 7, vv12, atau v v12');
   const item = media.get(id);
   if (!item) throw new Error(`Media #${id} tidak ketemu.`);
   if (!fs.existsSync(item.filePath)) throw new Error(`File media #${id} tidak ada di disk: ${item.filePath}`);
@@ -385,7 +401,7 @@ async function shortcut(sock: ReturnType<typeof makeWASocket>, line: string): Pr
   if (lower === 's' || lower.startsWith('s ')) return setMode('search', line.slice(1).trim());
   if (lower === 'c' || lower.startsWith('c ')) return setMode('contacts', line.slice(1).trim());
   if (lower.startsWith('r ')) { const [, idx, ...msg] = line.split(' '); const jid = resolveIndex(idx); if (!jid || !msg.join(' ')) throw new Error('Format: r <no> <pesan>'); return sendText(sock, jid, msg.join(' ')); }
-  if (lower.startsWith('v ')) return openMedia(line.slice(1).trim());
+  if (lower.startsWith('v ') || /^vv?\d+$/.test(lower)) return openMedia(lower.startsWith('v ') ? line.slice(1).trim() : line);
   if (line.startsWith('@')) { const [target, ...msg] = line.split(' '); if (!msg.join(' ')) throw new Error('Format: @alias <pesan>'); return sendText(sock, resolveTarget(target), msg.join(' ')); }
   if (mode === 'chat' && currentChat) return sendText(sock, currentChat, line);
   console.log(chalk.yellow('Tidak paham. Ketik /help.'));
@@ -407,7 +423,7 @@ async function connect(): Promise<void> {
   ensureDir(AUTH);
   const { state, saveCreds } = await useMultiFileAuthState(AUTH);
   const { version } = await fetchLatestBaileysVersion();
-  const sock = makeWASocket({ auth: state, version, logger, printQRInTerminal: false, browser: ['WA CMD', 'Chrome', '0.4.0'], markOnlineOnConnect: false, syncFullHistory: false });
+  const sock = makeWASocket({ auth: state, version, logger, printQRInTerminal: false, browser: ['WA CMD', 'Chrome', '0.4.1'], markOnlineOnConnect: false, syncFullHistory: false });
 
   sock.ev.on('creds.update', saveCreds);
   sock.ev.on('contacts.upsert', (items: unknown[]) => { for (const raw of items) { const x = raw as { id?: string; jid?: string; name?: string; notify?: string; verifiedName?: string }; const jid = x.id ?? x.jid; if (jid) upsertContact(jid, x.name, x.notify, x.verifiedName); } saveData(); });
