@@ -33,14 +33,11 @@ patchOnce('windows toaster notifier', (s) => {
 });
 
 patchOnce('native notification', (s) => {
-  if (s.includes('notifier.notify({')) return s;
-  const oldBlock = /function psQuote\(s: string\): string \{ return s\.replace\(\/'\/g, "''"\); \}\nfunction terminalBell\(\): void \{ try \{ process\.stdout\.write\('\\x07'\); \} catch \{ \/\* ignore \*\/ \} \}\nfunction windowsBalloon\(title: string, message: string\): void \{[\s\S]*?\n\}\nfunction notifyNewMessage\(sender: string, message: string\): void \{\n  const now = Date\.now\(\);\n  if \(now - lastNotificationAt < NOTIFICATION_COOLDOWN_MS\) return;\n  lastNotificationAt = now;\n  terminalBell\(\);\n  windowsBalloon\('WA CMD', `\$\{sender\}: \$\{message\}`\);\n\}/;
   const newBlock = `function terminalBell(): void { try { process.stdout.write('\\x07'); } catch { /* ignore */ } }
 function notifyNewMessage(sender: string, message: string): void {
   const now = Date.now();
   if (now - lastNotificationAt < NOTIFICATION_COOLDOWN_MS) return;
   lastNotificationAt = now;
-  terminalBell();
   try {
     notifier.notify({
       title: sender || 'WA CMD',
@@ -50,10 +47,16 @@ function notifyNewMessage(sender: string, message: string): void {
       appID: 'WA CMD',
     });
   } catch {
-    // notification should never break the WhatsApp client
+    terminalBell();
   }
 }`;
-  return s.replace(oldBlock, newBlock);
+
+  const oldWithBalloon = /function psQuote\(s: string\): string \{[\s\S]*?\nfunction notifyNewMessage\(sender: string, message: string\): void \{[\s\S]*?\n\}/;
+  const oldNotifierOnly = /function terminalBell\(\): void \{[\s\S]*?\nfunction notifyNewMessage\(sender: string, message: string\): void \{[\s\S]*?\n\}/;
+
+  if (oldWithBalloon.test(s)) return s.replace(oldWithBalloon, newBlock);
+  if (oldNotifierOnly.test(s)) return s.replace(oldNotifierOnly, newBlock);
+  return s;
 });
 
 patchOnce('jid-link resolver', (s) => {
