@@ -4,16 +4,19 @@ WhatsApp ringan di terminal/CMD, dibuat pakai [Baileys](https://github.com/Whisk
 
 > Catatan: ini client unofficial untuk eksperimen pribadi. Jangan pakai untuk spam, broadcast massal, scraping, atau aktivitas yang melanggar aturan WhatsApp. Folder `auth/` berisi session sensitif dan jangan pernah di-commit.
 
-## Fitur v0.2
+## Fitur v0.3
 
 - Login QR langsung dari terminal
-- Menerima pesan realtime
-- Kirim pesan dari command line
-- Lihat daftar chat terakhir
-- Lihat kontak yang tersinkron dari WhatsApp Web
-- Buka chat pakai index, nama kontak, nomor, JID, atau alias
-- Alias lokal, misalnya `@bos`, `@raihan`, `@backend`
-- Logout dengan hapus session lokal
+- Semi-TUI: inbox otomatis, pagination 10 item per halaman
+- Shortcut angka `1-10` untuk buka chat/kontak di halaman aktif
+- Shortcut `n` / `p` untuk next/previous page
+- Shortcut `s <nama>` untuk search gabungan chat + kontak
+- Shortcut `c <nama>` untuk filter contacts
+- Shortcut `r <no> <pesan>` untuk quick reply tanpa buka chat
+- Chat mode: ketik pesan langsung tanpa `/send`
+- Alias lokal, misalnya `@bot`, `@matcha`, `@bos`
+- Import kontak HP dari `.vcf`
+- Cache lokal untuk contacts, recent chats, dan pesan terakhir
 
 ## Requirement
 
@@ -59,72 +62,84 @@ Kalau ingin melepas command global:
 npm unlink -g wa-cmd
 ```
 
-## Command
+## Import kontak HP
 
-```txt
-/help                         tampilkan bantuan
-/chats                        lihat chat terakhir
-/contacts [nama]              lihat/cari kontak yang tersinkron
-/search <kata>                cari chat berdasarkan nama/JID/alias
-/open <index|nama|@alias|jid> buka chat
-/close                        keluar dari chat aktif
-/send <target> <pesan>        kirim pesan ke nomor/index/nama/@alias/JID
-/alias <target> <alias>       simpan alias lokal
-/aliases                      lihat daftar alias
-/logout                       hapus session WhatsApp lokal
-/clear                        bersihkan layar
-/exit                         keluar
+Export kontak dari HP ke file `.vcf`, lalu import ke wa-cmd:
+
+```bash
+npm run import-vcf -- "C:\Users\Lenovo\Downloads\contacts.vcf"
 ```
 
-## Contoh pakai
+Import ulang aman. Kontak disimpan berdasarkan JID/nomor, jadi nomor yang sama akan di-update, bukan diduplikasi.
 
-Lihat kontak:
-
-```txt
-/contacts
-```
-
-Cari kontak:
+## Shortcut utama
 
 ```txt
-/contacts raihan
+1-10                  buka item halaman aktif
+n / p                 next / prev page
+b / back              kembali ke inbox
+s <kata>              search chat + kontak
+c <kata>              filter contacts
+r <no> <pesan>        quick reply ke item di halaman aktif
+@alias <pesan>        quick send ke alias
+q                     keluar
 ```
 
-Buka chat dari nama kontak:
+## Slash command
 
 ```txt
-/open raihan
+/help                        tampilkan bantuan
+/chats                       tampilkan inbox
+/contacts [nama]             lihat/cari kontak + chat tersimpan
+/search <kata>               cari chat + kontak
+/open <target>               buka chat
+/send <target> <pesan>       kirim pesan
+/alias <target> <alias>      simpan alias lokal
+/aliases                     lihat daftar alias
+/logout                      hapus session WhatsApp lokal
+/clear                       render ulang layar
+/exit                        keluar
 ```
 
-Kirim ke nomor:
+## Contoh pakai UX baru
+
+Cari kontak/chat:
 
 ```txt
-/send 6281234567890 halo dari terminal
+s bot
+c adit
 ```
 
-Lihat chat terakhir:
+Buka item nomor 1 di halaman aktif:
 
 ```txt
-/chats
+1
 ```
 
-Buka chat nomor 1 dari daftar:
-
-```txt
-/open 1
-```
-
-Setelah chat dibuka, ketik pesan biasa:
+Saat sudah masuk chat, cukup ketik pesan biasa:
 
 ```txt
 siap, nanti aku cek
 ```
 
+Quick reply tanpa buka chat:
+
+```txt
+r 2 kerja kok
+```
+
 Bikin alias:
 
 ```txt
-/alias 1 bos
-/send @bos siap pak
+/alias 1 bot
+@bot halo
+```
+
+Pagination:
+
+```txt
+n
+p
 ```
 
 ## Data lokal
@@ -134,20 +149,26 @@ File/folder yang dibuat otomatis:
 ```txt
 auth/                session WhatsApp lokal
 data/aliases.json    alias lokal
-data/contacts.json   cache kontak lokal
+data/contacts.json   cache kontak lokal hasil sync/import VCF
+data/chats.json      cache recent chats lokal
+data/messages.json   cache pesan lokal terakhir per chat
 ```
 
 Folder `auth/` dan `data/` sudah masuk `.gitignore`.
 
+## Catatan history
+
+WA CMD menyimpan pesan yang diterima/dikirim saat app aktif ke `data/messages.json`. Jadi kalau app dibuka ulang, chat mode bisa menampilkan pesan lokal terakhir.
+
+History lama dari WhatsApp HP/WhatsApp Web belum dijamin tersinkron penuh, karena Baileys berjalan sebagai companion WhatsApp Web dan tidak selalu menerima semua isi history lama.
+
 ## Catatan kontak
 
-Baileys berjalan sebagai companion WhatsApp Web. Artinya kontak yang muncul bergantung pada data yang dikirim WhatsApp Web ke session ini. Biasanya kontak akan makin lengkap setelah WhatsApp selesai sync, setelah ada pesan masuk, atau setelah kamu membuka/berinteraksi dengan chat terkait.
-
-Kalau `/contacts` masih kosong, coba tunggu beberapa saat setelah `Connected ✓`, kirim pesan dari HP lain ke akunmu, atau buka kontak tersebut dari WhatsApp HP lalu jalankan ulang `wa-cmd`.
+Baileys tidak selalu dapat semua kontak lokal HP secara otomatis. Untuk daftar kontak lengkap, cara paling stabil adalah export kontak HP ke `.vcf`, lalu import dengan `npm run import-vcf`.
 
 ## Kalau muncul `Bad MAC` / gagal decrypt
 
-Kadang Baileys/libsignal gagal decrypt pesan tertentu karena session key belum sinkron, pesan lama di-retry, atau Linked Device sempat bentrok. Di versi ini log noisy seperti `Failed to decrypt message with any known session` dan `Bad MAC` sudah disembunyikan supaya terminal tetap bersih.
+Kadang Baileys/libsignal gagal decrypt pesan tertentu karena session key belum sinkron, pesan lama di-retry, atau Linked Device sempat bentrok. Log noisy seperti `Failed to decrypt message with any known session` dan `Bad MAC` disembunyikan supaya terminal tetap bersih.
 
 Kalau pesan baru tetap tidak kebaca terus-menerus, reset session:
 
@@ -163,19 +184,17 @@ Settings > Linked devices > pilih WA CMD > Log out
 
 Setelah itu jalankan lagi `wa-cmd` dan scan QR ulang.
 
-## Batasan v0.2
+## Batasan v0.3
 
-- Belum tentu semua kontak HP mentah langsung muncul seperti aplikasi Contacts Android.
-- Belum sync semua history WhatsApp.
+- Belum sync semua isi history lama WhatsApp.
 - Beberapa pesan lama/retry bisa gagal decrypt di Baileys.
 - Belum support kirim gambar/file.
-- UI terminal bisa agak berantakan kalau pesan masuk saat kamu sedang mengetik.
+- UI terminal bisa agak berantakan kalau pesan masuk tepat saat mengetik.
 
 ## Roadmap ide berikutnya
 
-- Simpan recent chats ke `data/chats.json`
 - Kirim gambar/file dari terminal
-- Mode fuzzy search yang lebih enak
+- Mode fuzzy search yang lebih pintar untuk nama unicode/emoji
 - Export chat lokal
 - Notifikasi Windows
 - Multi-account profile
