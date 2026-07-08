@@ -100,6 +100,13 @@ function findLikelyCanonicalForIncoming(rawJid: string, pushName: string | undef
   return `${s.slice(0, idx)}${replacement}${s.slice(end)}`;
 });
 
+patchOnce('nullable pushName', (s) => {
+  return s.replaceAll(
+    'findLikelyCanonicalForIncoming(rawJid, m.pushName, at)',
+    'findLikelyCanonicalForIncoming(rawJid, m.pushName ?? undefined, at)'
+  );
+});
+
 patchOnce('notification trigger root jid compare', (s) => {
   return s.replace(
     "if (!fromMe && currentChat !== jid) notifyNewMessage(nameOf(jid), text);",
