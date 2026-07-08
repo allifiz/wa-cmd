@@ -158,7 +158,7 @@ function normalizeText(input: string): string {
 
 function normalizePhoneToJid(input: string): string {
   const cleaned = input.replace(/[^0-9]/g, '');
-  if (!cleaned) throw new Error('Nomor kosong. Contoh: 6281234567890');
+  if (!cleaned) throw new Error(`Target "${input}" belum ketemu. Pakai /chats, /contacts, nomor 628xxx, atau buat alias dengan /alias <index> <nama>.`);
   return `${cleaned}@s.whatsapp.net`;
 }
 
@@ -220,9 +220,30 @@ function getSortedChats(): ChatItem[] {
   return [...chats.values()].sort((a, b) => b.lastAt - a.lastAt);
 }
 
+function getMergedContacts(): ContactItem[] {
+  const merged = new Map<string, ContactItem>();
+
+  for (const [jid, contact] of contacts.entries()) {
+    merged.set(jid, contact);
+  }
+
+  for (const chat of chats.values()) {
+    const existing = merged.get(chat.jid);
+    merged.set(chat.jid, {
+      jid: chat.jid,
+      name: existing?.name && existing.name !== chat.jid ? existing.name : chat.name,
+      notify: existing?.notify,
+      verifiedName: existing?.verifiedName,
+      updatedAt: Math.max(existing?.updatedAt ?? 0, chat.lastAt),
+    });
+  }
+
+  return [...merged.values()];
+}
+
 function getSortedContacts(filter?: string): ContactItem[] {
   const normalizedFilter = filter ? normalizeText(filter) : '';
-  return [...contacts.values()]
+  return getMergedContacts()
     .filter((contact) => {
       const alias = getAliasForJid(contact.jid);
       if (!normalizedFilter) return true;
@@ -270,7 +291,7 @@ function printContacts(filter?: string): void {
   const sorted = getSortedContacts(filter);
 
   if (sorted.length === 0) {
-    console.log(chalk.yellow('Belum ada kontak tersimpan dari WhatsApp Web. Coba tunggu beberapa saat, buka WA HP, atau tunggu pesan masuk.'));
+    console.log(chalk.yellow('Belum ada kontak/chat tersimpan. Tunggu pesan masuk atau kirim pakai nomor 628xxx.'));
     return;
   }
 
@@ -278,8 +299,9 @@ function printContacts(filter?: string): void {
   for (const [index, contact] of visible.entries()) {
     const alias = getAliasForJid(contact.jid);
     const aliasText = alias ? chalk.gray(` @${alias}`) : '';
-    const phone = contact.jid.replace('@s.whatsapp.net', '').replace('@g.us', '');
-    console.log(`${chalk.cyan(`[${index + 1}]`)} ${contact.name}${aliasText} ${chalk.gray(phone)}`);
+    const id = contact.jid.replace('@s.whatsapp.net', '').replace('@g.us', '').replace('@lid', '');
+    const source = chats.has(contact.jid) ? chalk.gray(' chat') : chalk.gray(' contact');
+    console.log(`${chalk.cyan(`[${index + 1}]`)} ${contact.name}${aliasText} ${chalk.gray(id)}${source}`);
   }
 
   if (sorted.length > visible.length) {
@@ -299,20 +321,33 @@ function resolveContactByIndex(raw: string): string | null {
   return getSortedContacts()[index - 1]?.jid ?? null;
 }
 
+function resolveChatByName(raw: string): string | null {
+  const value = normalizeText(raw);
+  if (!value) return null;
+
+  const sorted = getSortedChats();
+  const exact = sorted.find((chat) => normalizeText(chat.name) === value || normalizeText(renderChatName(chat.jid)) === value);
+  if (exact) return exact.jid;
+
+  const partial = sorted.find((chat) => normalizeText(chat.name).includes(value) || normalizeText(renderChatName(chat.jid)).includes(value));
+  return partial?.jid ?? null;
+}
+
 function resolveContactByName(raw: string): string | null {
   const value = normalizeText(raw);
   if (!value) return null;
 
-  const exact = getSortedContacts().find((contact) => normalizeText(contact.name) === value);
+  const sorted = getSortedContacts();
+  const exact = sorted.find((contact) => normalizeText(contact.name) === value);
   if (exact) return exact.jid;
 
-  const partial = getSortedContacts().find((contact) => normalizeText(contact.name).includes(value));
+  const partial = sorted.find((contact) => normalizeText(contact.name).includes(value));
   return partial?.jid ?? null;
 }
 
 function resolveTarget(raw: string): string {
   const value = raw.trim();
-  if (!value) throw new Error('Target kosong. Pakai nomor, index chat, nama kontak, JID, atau @alias.');
+  if (!value) throw new Error('Target kosong. Pakai nomor, index chat, nama kontak/chat, JID, atau @alias.');
 
   if (value.startsWith('@')) {
     const alias = value.slice(1).toLowerCase();
@@ -327,7 +362,10 @@ function resolveTarget(raw: string): string {
   const contactIndexed = resolveContactByIndex(value);
   if (contactIndexed) return contactIndexed;
 
-  if (value.includes('@s.whatsapp.net') || value.includes('@g.us')) return jidNormalizedUser(value);
+  if (value.includes('@s.whatsapp.net') || value.includes('@g.us') || value.includes('@lid')) return jidNormalizedUser(value);
+
+  const namedChat = resolveChatByName(value);
+  if (namedChat) return namedChat;
 
   const namedContact = resolveContactByName(value);
   if (namedContact) return namedContact;
@@ -358,7 +396,7 @@ function printHelp(): void {
 ${chalk.cyan.bold('Command utama')}
   /help                         tampilkan bantuan
   /chats                        lihat chat terakhir
-  /contacts [nama]              lihat/cari kontak yang tersinkron
+  /contacts [nama]              lihat/cari kontak + chat tersimpan
   /search <kata>                cari chat berdasarkan nama/JID/alias
   /open <index|nama|@alias|jid> buka chat
   /close                        keluar dari chat aktif
@@ -373,12 +411,13 @@ ${chalk.cyan.bold('Shortcut')}
   Saat chat sudah dibuka, ketik pesan biasa tanpa command untuk langsung mengirim.
 
 ${chalk.cyan.bold('Contoh')}
-  /contacts raihan
-  /open raihan
+  /contacts hina
+  /chats
+  /open hina
+  /send hina halo dari terminal
   /send 6281234567890 halo dari terminal
-  /open 1
-  /alias 1 bos
-  /send @bos siap pak
+  /alias 1 bot
+  /send @bot siap
 `);
 }
 
@@ -543,7 +582,7 @@ async function connect(): Promise<void> {
     if (connection === 'open') {
       reconnecting = false;
       console.log(chalk.green('Connected ✓'));
-      console.log(chalk.gray('Ketik /help untuk mulai. Pakai /contacts untuk lihat kontak yang tersinkron.'));
+      console.log(chalk.gray('Ketik /help untuk mulai. Pakai /contacts untuk lihat kontak/chat tersimpan.'));
     }
 
     if (connection === 'close') {
