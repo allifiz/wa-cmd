@@ -16,6 +16,12 @@ type FoundNode = {
   flags?: Record<string, unknown>;
 };
 
+type QuotedNode = {
+  path: string;
+  quoted: unknown;
+  contextKeys: string[];
+};
+
 const interestingKeys = new Set([
   'message',
   'ephemeralMessage',
@@ -30,6 +36,9 @@ const interestingKeys = new Set([
   'editedMessage',
   'protocolMessage',
   'messageContextInfo',
+  'contextInfo',
+  'quotedMessage',
+  'extendedTextMessage',
 ]);
 
 function keysOf(value: unknown): string[] {
@@ -50,7 +59,7 @@ function pickFlags(value: unknown): Record<string, unknown> | undefined {
   for (const key of ['viewOnce', 'mimetype', 'caption', 'seconds', 'expiration', 'ephemeralSettingTimestamp', 'deviceListMetadataVersion']) {
     if (key in obj) flags[key] = obj[key];
   }
-  for (const key of ['url', 'directPath', 'mediaKey', 'fileSha256', 'fileEncSha256', 'jpegThumbnail', 'deviceListMetadata']) {
+  for (const key of ['url', 'directPath', 'mediaKey', 'fileSha256', 'fileEncSha256', 'jpegThumbnail', 'thumbnailDirectPath', 'thumbnailSha256', 'thumbnailEncSha256', 'deviceListMetadata']) {
     if (key in obj) flags[`${key}Present`] = Boolean(obj[key]);
   }
   return Object.keys(flags).length ? flags : undefined;
@@ -65,11 +74,11 @@ function summarizeValue(value: unknown): unknown {
   const obj = value as Record<string, unknown>;
   const out: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(obj)) {
-    if (['mediaKey', 'fileSha256', 'fileEncSha256', 'jpegThumbnail'].includes(key)) {
+    if (['mediaKey', 'fileSha256', 'fileEncSha256', 'jpegThumbnail', 'thumbnailSha256', 'thumbnailEncSha256'].includes(key)) {
       out[`${key}Present`] = Boolean(child);
       continue;
     }
-    if (key === 'url' || key === 'directPath') {
+    if (['url', 'directPath', 'thumbnailDirectPath'].includes(key)) {
       out[`${key}Present`] = Boolean(child);
       continue;
     }
@@ -83,7 +92,7 @@ function summarizeValue(value: unknown): unknown {
 }
 
 function walk(value: unknown, currentPath = 'message', depth = 0, found: FoundNode[] = []): FoundNode[] {
-  if (!value || typeof value !== 'object' || depth > 8) return found;
+  if (!value || typeof value !== 'object' || depth > 10) return found;
   const obj = value as Record<string, unknown>;
   const keys = Object.keys(obj);
 
@@ -110,9 +119,78 @@ function detectViewOnce(msg?: proto.IMessage | null): boolean {
   return found.some((item) => item.path.toLowerCase().includes('viewonce') || item.flags?.viewOnce === true);
 }
 
+function findQuotedMessages(value: unknown, currentPath = 'message', depth = 0, found: QuotedNode[] = []): QuotedNode[] {
+  if (!value || typeof value !== 'object' || depth > 10) return found;
+  const obj = value as Record<string, unknown>;
+
+  const contextInfo = obj.contextInfo;
+  if (contextInfo && typeof contextInfo === 'object') {
+    const context = contextInfo as Record<string, unknown>;
+    if (context.quotedMessage) {
+      found.push({
+        path: `${currentPath}.contextInfo.quotedMessage`,
+        quoted: context.quotedMessage,
+        contextKeys: Object.keys(context),
+      });
+    }
+  }
+
+  for (const [key, child] of Object.entries(obj)) {
+    if (child && typeof child === 'object') {
+      const shouldDive = interestingKeys.has(key) || key.toLowerCase().includes('message') || key === 'contextInfo';
+      if (shouldDive) findQuotedMessages(child, `${currentPath}.${key}`, depth + 1, found);
+    }
+  }
+
+  return found;
+}
+
+function getFirstMediaFlags(msg: unknown): Record<string, unknown> | undefined {
+  if (!msg || typeof msg !== 'object') return undefined;
+  const obj = msg as Record<string, unknown>;
+  for (const key of ['imageMessage', 'videoMessage', 'audioMessage', 'documentMessage', 'stickerMessage']) {
+    const media = obj[key];
+    if (media && typeof media === 'object') {
+      return { mediaKey: key, ...pickFlags(media) };
+    }
+  }
+
+  for (const nestedKey of ['viewOnceMessage', 'viewOnceMessageV2', 'viewOnceMessageV2Extension', 'ephemeralMessage', 'documentWithCaptionMessage']) {
+    const nested = obj[nestedKey];
+    if (nested && typeof nested === 'object') {
+      const nestedMsg = (nested as Record<string, unknown>).message;
+      const flags = getFirstMediaFlags(nestedMsg);
+      if (flags) return flags;
+    }
+  }
+
+  return undefined;
+}
+
+function printQuotedDebug(msg: proto.IMessage | null | undefined): void {
+  const quotedMessages = findQuotedMessages(msg ?? {}, 'message');
+  const summary = quotedMessages.map((item) => {
+    const quoted = item.quoted;
+    const quotedKeys = keysOf(quoted);
+    const quotedFound = walk(quoted, item.path);
+    return {
+      path: item.path,
+      contextKeys: item.contextKeys,
+      quotedKeys,
+      quotedDetectedViewOnce: detectViewOnce(quoted as proto.IMessage),
+      quotedMediaFlags: getFirstMediaFlags(quoted),
+      quotedTree: quotedFound.map((node) => ({ path: node.path, keys: node.keys, flags: node.flags })),
+    };
+  });
+
+  console.log(chalk.magenta('quoted debug:'));
+  console.log(JSON.stringify({ hasQuotedMessage: quotedMessages.length > 0, quotedCount: quotedMessages.length, summary }, null, 2));
+}
+
 function printMessage(raw: proto.IWebMessageInfo): void {
   const msg = raw.message;
   const rawObj = raw as Record<string, unknown>;
+  const keyObj = raw.key as Record<string, unknown>;
   const at = Number(raw.messageTimestamp ?? Math.floor(Date.now() / 1000)) * 1000;
   const header = {
     time: new Date(at).toISOString(),
@@ -121,6 +199,8 @@ function printMessage(raw: proto.IWebMessageInfo): void {
     id: raw.key.id,
     pushName: raw.pushName,
     outerKeys: Object.keys(rawObj),
+    keyKeys: Object.keys(keyObj),
+    keyIsViewOnce: keyObj.isViewOnce,
     topLevelKeys: keysOf(msg),
     messageType: valueType(msg),
     messageIsEmptyObject: Boolean(msg && typeof msg === 'object' && Object.keys(msg).length === 0),
@@ -145,13 +225,17 @@ function printMessage(raw: proto.IWebMessageInfo): void {
     if (item.flags) console.log(`  flags: ${JSON.stringify(item.flags)}`);
   }
 
+  printQuotedDebug(msg);
+
   console.log(chalk.gray('safe top-level summary:'));
   console.log(JSON.stringify(summarizeValue(rawObj), null, 2));
 }
 
 async function connect(): Promise<void> {
-  console.log(chalk.cyan('Debug view-once mode. Pakai auth/ yang sama dengan wa-cmd.'));
-  console.log(chalk.gray('Kirim foto biasa dan view-once baru ke akun ini, lalu bandingkan output-nya. Ctrl+C untuk keluar.'));
+  console.log(chalk.cyan('Debug view-once + quoted-message mode. Pakai auth/ yang sama dengan wa-cmd.'));
+  console.log(chalk.gray('Tes 1: kirim view-once baru ke akun ini.'));
+  console.log(chalk.gray('Tes 2: dari HP utama akun ini, reply/quote view-once itu dengan teks bebas.'));
+  console.log(chalk.gray('Yang dicari: quoted debug.hasQuotedMessage=true dan quotedMediaFlags punya mediaKey/directPath/urlPresent. Ctrl+C untuk keluar.'));
 
   const { state, saveCreds } = await useMultiFileAuthState(AUTH);
   const { version } = await fetchLatestBaileysVersion();
@@ -160,7 +244,7 @@ async function connect(): Promise<void> {
     version,
     logger,
     printQRInTerminal: false,
-    browser: ['WA CMD Debug', 'Chrome', '0.2.0'],
+    browser: ['WA CMD Debug', 'Chrome', '0.3.0'],
     markOnlineOnConnect: false,
     syncFullHistory: false,
   });
