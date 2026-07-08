@@ -107,11 +107,16 @@ patchOnce('nullable pushName', (s) => {
   );
 });
 
-patchOnce('notification trigger root jid compare', (s) => {
-  return s.replace(
+patchOnce('notify every incoming message', (s) => {
+  let out = s.replace(
     "if (!fromMe && currentChat !== jid) notifyNewMessage(nameOf(jid), text);",
-    "if (!fromMe && (!currentChat || rootJid(currentChat) !== rootJid(jid))) notifyNewMessage(nameOf(jid), text);"
+    "if (!fromMe) notifyNewMessage(nameOf(jid), text);"
   );
+  out = out.replace(
+    "if (!fromMe && (!currentChat || rootJid(currentChat) !== rootJid(jid))) notifyNewMessage(nameOf(jid), text);",
+    "if (!fromMe) notifyNewMessage(nameOf(jid), text);"
+  );
+  return out;
 });
 
 if (changed) fs.writeFileSync(file, src);
