@@ -4,13 +4,14 @@ WhatsApp ringan di terminal/CMD, dibuat pakai [Baileys](https://github.com/Whisk
 
 > Catatan: ini client unofficial untuk eksperimen pribadi. Jangan pakai untuk spam, broadcast massal, scraping, atau aktivitas yang melanggar aturan WhatsApp. Folder `auth/` berisi session sensitif dan jangan pernah di-commit.
 
-## Fitur v0.1
+## Fitur v0.2
 
 - Login QR langsung dari terminal
 - Menerima pesan realtime
 - Kirim pesan dari command line
 - Lihat daftar chat terakhir
-- Buka chat lalu balas dengan mengetik biasa
+- Lihat kontak yang tersinkron dari WhatsApp Web
+- Buka chat pakai index, nama kontak, nomor, JID, atau alias
 - Alias lokal, misalnya `@bos`, `@raihan`, `@backend`
 - Logout dengan hapus session lokal
 
@@ -63,11 +64,12 @@ npm unlink -g wa-cmd
 ```txt
 /help                         tampilkan bantuan
 /chats                        lihat chat terakhir
+/contacts [nama]              lihat/cari kontak yang tersinkron
 /search <kata>                cari chat berdasarkan nama/JID/alias
-/open <index|@alias|jid>      buka chat
+/open <index|nama|@alias|jid> buka chat
 /close                        keluar dari chat aktif
-/send <target> <pesan>        kirim pesan ke nomor/index/@alias/JID
-/alias <index|jid|nomor> <a>  simpan alias lokal
+/send <target> <pesan>        kirim pesan ke nomor/index/nama/@alias/JID
+/alias <target> <alias>       simpan alias lokal
 /aliases                      lihat daftar alias
 /logout                       hapus session WhatsApp lokal
 /clear                        bersihkan layar
@@ -75,6 +77,24 @@ npm unlink -g wa-cmd
 ```
 
 ## Contoh pakai
+
+Lihat kontak:
+
+```txt
+/contacts
+```
+
+Cari kontak:
+
+```txt
+/contacts raihan
+```
+
+Buka chat dari nama kontak:
+
+```txt
+/open raihan
+```
 
 Kirim ke nomor:
 
@@ -112,15 +132,22 @@ Bikin alias:
 File/folder yang dibuat otomatis:
 
 ```txt
-auth/              session WhatsApp lokal
-data/aliases.json  alias lokal
+auth/                session WhatsApp lokal
+data/aliases.json    alias lokal
+data/contacts.json   cache kontak lokal
 ```
 
-Dua folder itu sudah masuk `.gitignore`.
+Folder `auth/` dan `data/` sudah masuk `.gitignore`.
 
-## Batasan v0.1
+## Catatan kontak
 
-- Nama kontak bergantung dari pesan yang masuk, jadi awalnya daftar chat bisa kosong.
+Baileys berjalan sebagai companion WhatsApp Web. Artinya kontak yang muncul bergantung pada data yang dikirim WhatsApp Web ke session ini. Biasanya kontak akan makin lengkap setelah WhatsApp selesai sync, setelah ada pesan masuk, atau setelah kamu membuka/berinteraksi dengan chat terkait.
+
+Kalau `/contacts` masih kosong, coba tunggu beberapa saat setelah `Connected ✓`, kirim pesan dari HP lain ke akunmu, atau buka kontak tersebut dari WhatsApp HP lalu jalankan ulang `wa-cmd`.
+
+## Batasan v0.2
+
+- Belum tentu semua kontak HP mentah langsung muncul seperti aplikasi Contacts Android.
 - Belum sync semua history WhatsApp.
 - Belum support kirim gambar/file.
 - UI terminal bisa agak berantakan kalau pesan masuk saat kamu sedang mengetik.
