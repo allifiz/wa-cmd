@@ -52,8 +52,42 @@ function unfoldVcf(content: string): string[] {
   return lines;
 }
 
+function decodeQuotedPrintable(value: string): string {
+  if (!/=([0-9A-F]{2})/i.test(value)) return value;
+
+  const bytes: number[] = [];
+  let output = '';
+
+  function flushBytes(): void {
+    if (bytes.length === 0) return;
+    output += Buffer.from(bytes).toString('utf8');
+    bytes.length = 0;
+  }
+
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    const hex = value.slice(index + 1, index + 3);
+
+    if (char === '=' && /^[0-9A-F]{2}$/i.test(hex)) {
+      bytes.push(Number.parseInt(hex, 16));
+      index += 2;
+      continue;
+    }
+
+    if (char === '=' && (value[index + 1] === '\n' || value.slice(index + 1, index + 3) === '\r\n')) {
+      continue;
+    }
+
+    flushBytes();
+    output += char;
+  }
+
+  flushBytes();
+  return output;
+}
+
 function cleanVcfValue(value: string): string {
-  return value
+  return decodeQuotedPrintable(value)
     .replace(/\\n/gi, ' ')
     .replace(/\\,/g, ',')
     .replace(/\\;/g, ';')
