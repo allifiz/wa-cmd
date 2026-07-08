@@ -27,6 +27,7 @@ const FILES = {
 };
 const PAGE_SIZE = 10;
 const MAX_MSG = 80;
+const DUPLICATE_WINDOW_MS = 3000;
 
 const chats = new Map<string, ChatItem>();
 const contacts = new Map<string, ContactItem>();
@@ -58,18 +59,32 @@ function writeJson(file: string, value: unknown): void {
   fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
+function isSameMessage(a: StoredMessage, b: StoredMessage): boolean {
+  return a.jid === b.jid && a.fromMe === b.fromMe && a.text === b.text && Math.abs(a.at - b.at) <= DUPLICATE_WINDOW_MS;
+}
+
+function dedupeMessageList(list: StoredMessage[]): StoredMessage[] {
+  const clean: StoredMessage[] = [];
+  for (const item of list) {
+    if (!item.text || item.text === '[unsupported message]') continue;
+    const exists = clean.some((old) => isSameMessage(old, item));
+    if (!exists) clean.push(item);
+  }
+  return clean.slice(-MAX_MSG);
+}
+
 function loadData(): void {
   aliases = readJson<AliasStore>(FILES.aliases, {});
   for (const c of Object.values(readJson<Record<string, ContactItem>>(FILES.contacts, {}))) if (c.jid) contacts.set(c.jid, c);
   for (const c of Object.values(readJson<Record<string, ChatItem>>(FILES.chats, {}))) if (c.jid) chats.set(c.jid, c);
-  for (const [jid, list] of Object.entries(readJson<Record<string, StoredMessage[]>>(FILES.messages, {}))) messages.set(jid, list.slice(-MAX_MSG));
+  for (const [jid, list] of Object.entries(readJson<Record<string, StoredMessage[]>>(FILES.messages, {}))) messages.set(jid, dedupeMessageList(list));
 }
 
 function saveData(): void {
   writeJson(FILES.aliases, aliases);
   writeJson(FILES.contacts, Object.fromEntries(contacts));
   writeJson(FILES.chats, Object.fromEntries(chats));
-  writeJson(FILES.messages, Object.fromEntries([...messages.entries()].map(([jid, list]) => [jid, list.slice(-MAX_MSG)])));
+  writeJson(FILES.messages, Object.fromEntries([...messages.entries()].map(([jid, list]) => [jid, dedupeMessageList(list)])));
 }
 
 function norm(s: string): string { return s.trim().toLowerCase(); }
@@ -133,7 +148,9 @@ function upsertChat(jid: string, name: string, msg: string, fromMe: boolean, at:
 }
 
 function pushMsg(m: StoredMessage): void {
+  if (!m.text || m.text === '[unsupported message]') return;
   const list = messages.get(m.jid) ?? [];
+  if (list.some((old) => isSameMessage(old, m))) return;
   list.push(m);
   messages.set(m.jid, list.slice(-MAX_MSG));
 }
@@ -196,7 +213,7 @@ function renderChat(): void {
   console.log(chalk.cyan.bold(`Chat: ${nameOf(currentChat)}`));
   console.log(chalk.gray('Ketik pesan langsung. b/back kembali.'));
   console.log('');
-  const list = (messages.get(currentChat) ?? []).filter((m) => m.text && m.text !== '[unsupported message]').slice(-30);
+  const list = dedupeMessageList(messages.get(currentChat) ?? []).slice(-30);
   if (!list.length) console.log(chalk.gray('Belum ada pesan lokal untuk chat ini.'));
   for (const m of list) console.log(`${chalk.gray(time(m.at))} ${m.fromMe ? chalk.green('kamu') : chalk.magenta(m.senderName || 'dia')}: ${m.text}`);
   console.log('');
@@ -306,7 +323,7 @@ async function connect(): Promise<void> {
   if (!fs.existsSync(AUTH)) fs.mkdirSync(AUTH, { recursive: true });
   const { state, saveCreds } = await useMultiFileAuthState(AUTH);
   const { version } = await fetchLatestBaileysVersion();
-  const sock = makeWASocket({ auth: state, version, logger, printQRInTerminal: false, browser: ['WA CMD', 'Chrome', '0.3.2'], markOnlineOnConnect: false, syncFullHistory: false });
+  const sock = makeWASocket({ auth: state, version, logger, printQRInTerminal: false, browser: ['WA CMD', 'Chrome', '0.3.3'], markOnlineOnConnect: false, syncFullHistory: false });
 
   sock.ev.on('creds.update', saveCreds);
   sock.ev.on('contacts.upsert', (items: unknown[]) => { for (const raw of items) { const x = raw as { id?: string; jid?: string; name?: string; notify?: string; verifiedName?: string }; const jid = x.id ?? x.jid; if (jid) upsertContact(jid, x.name, x.notify, x.verifiedName); } saveData(); });
