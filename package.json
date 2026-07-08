@@ -1,0 +1,41 @@
+{
+  "name": "wa-cmd",
+  "version": "0.1.0",
+  "description": "Lightweight WhatsApp terminal client powered by Baileys.",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "wa-cmd": "./dist/index.js"
+  },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "whatsapp",
+    "cli",
+    "terminal",
+    "baileys"
+  ],
+  "author": "allifiz",
+  "license": "MIT",
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.18",
+    "chalk": "^5.3.0",
+    "qrcode-terminal": "^0.12.0",
+    "readline-sync": "^1.4.10",
+    "pino": "^9.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.4",
+    "@types/qrcode-terminal": "^0.12.2",
+    "@types/readline-sync": "^1.4.8",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
