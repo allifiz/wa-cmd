@@ -32,16 +32,28 @@ type StoredMessage = {
   at: number;
 };
 
+type ContactItem = {
+  jid: string;
+  name: string;
+  notify?: string;
+  verifiedName?: string;
+  updatedAt: number;
+};
+
 type AliasStore = Record<string, string>;
+type ContactStore = Record<string, ContactItem>;
 
 const ROOT_DIR = process.cwd();
 const AUTH_DIR = path.join(ROOT_DIR, 'auth');
 const DATA_DIR = path.join(ROOT_DIR, 'data');
 const ALIAS_FILE = path.join(DATA_DIR, 'aliases.json');
+const CONTACTS_FILE = path.join(DATA_DIR, 'contacts.json');
 const MAX_MESSAGES_PER_CHAT = 30;
+const MAX_PRINTED_CONTACTS = 60;
 
 const chats = new Map<string, ChatItem>();
 const messages = new Map<string, StoredMessage[]>();
+const contacts = new Map<string, ContactItem>();
 let currentChatJid: string | null = null;
 let aliases: AliasStore = loadAliases();
 let reconnecting = false;
@@ -49,24 +61,46 @@ let reconnecting = false;
 const logger = P({ level: 'silent' });
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
+loadContactsIntoMemory();
+
 function ensureDir(dir: string): void {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
-function loadAliases(): AliasStore {
+function loadJsonFile<T>(filePath: string, fallback: T): T {
   ensureDir(DATA_DIR);
-  if (!fs.existsSync(ALIAS_FILE)) return {};
+  if (!fs.existsSync(filePath)) return fallback;
 
   try {
-    return JSON.parse(fs.readFileSync(ALIAS_FILE, 'utf8')) as AliasStore;
+    return JSON.parse(fs.readFileSync(filePath, 'utf8')) as T;
   } catch {
-    return {};
+    return fallback;
   }
+}
+
+function loadAliases(): AliasStore {
+  return loadJsonFile<AliasStore>(ALIAS_FILE, {});
 }
 
 function saveAliases(): void {
   ensureDir(DATA_DIR);
   fs.writeFileSync(ALIAS_FILE, `${JSON.stringify(aliases, null, 2)}\n`);
+}
+
+function loadContactsIntoMemory(): void {
+  const stored = loadJsonFile<ContactStore>(CONTACTS_FILE, {});
+  for (const contact of Object.values(stored)) {
+    if (contact.jid && contact.name) contacts.set(contact.jid, contact);
+  }
+}
+
+function saveContacts(): void {
+  ensureDir(DATA_DIR);
+  const payload: ContactStore = {};
+  for (const [jid, contact] of contacts.entries()) {
+    payload[jid] = contact;
+  }
+  fs.writeFileSync(CONTACTS_FILE, `${JSON.stringify(payload, null, 2)}\n`);
 }
 
 function printHeader(): void {
@@ -79,7 +113,7 @@ function printHeader(): void {
 function promptLabel(): string {
   if (!currentChatJid) return chalk.green('wa-cmd> ');
   const chat = chats.get(currentChatJid);
-  return chalk.green(`${chat?.name ?? currentChatJid}> `);
+  return chalk.green(`${chat?.name ?? renderChatName(currentChatJid)}> `);
 }
 
 function getMessageText(message?: proto.IMessage | null): string {
@@ -118,6 +152,10 @@ function displayTime(timestamp: number): string {
   }).format(new Date(timestamp));
 }
 
+function normalizeText(input: string): string {
+  return input.trim().toLowerCase();
+}
+
 function normalizePhoneToJid(input: string): string {
   const cleaned = input.replace(/[^0-9]/g, '');
   if (!cleaned) throw new Error('Nomor kosong. Contoh: 6281234567890');
@@ -129,15 +167,40 @@ function getAliasForJid(jid: string): string | null {
   return entry?.[0] ?? null;
 }
 
+function getContactName(jid: string): string | null {
+  const contact = contacts.get(jid);
+  return contact?.name ?? contact?.notify ?? contact?.verifiedName ?? null;
+}
+
 function renderChatName(jid: string): string {
   const alias = getAliasForJid(jid);
   if (alias) return `@${alias}`;
+  const contactName = getContactName(jid);
+  if (contactName) return contactName;
   const chat = chats.get(jid);
   return chat?.name ?? jid;
 }
 
+function upsertContact(jid: string, rawName?: string | null, notify?: string | null, verifiedName?: string | null): void {
+  const normalizedJid = jidNormalizedUser(jid);
+  if (!normalizedJid || normalizedJid === 'status@broadcast') return;
+
+  const old = contacts.get(normalizedJid);
+  const fallbackName = old?.name ?? old?.notify ?? old?.verifiedName ?? normalizedJid;
+  const name = rawName || notify || verifiedName || fallbackName;
+
+  contacts.set(normalizedJid, {
+    jid: normalizedJid,
+    name,
+    notify: notify ?? old?.notify,
+    verifiedName: verifiedName ?? old?.verifiedName,
+    updatedAt: Date.now(),
+  });
+}
+
 function upsertChat(jid: string, name: string, text: string, fromMe: boolean, at: number): void {
   const old = chats.get(jid);
+  upsertContact(jid, name);
   chats.set(jid, {
     jid,
     name: old?.name && old.name !== jid ? old.name : name,
@@ -157,30 +220,70 @@ function getSortedChats(): ChatItem[] {
   return [...chats.values()].sort((a, b) => b.lastAt - a.lastAt);
 }
 
+function getSortedContacts(filter?: string): ContactItem[] {
+  const normalizedFilter = filter ? normalizeText(filter) : '';
+  return [...contacts.values()]
+    .filter((contact) => {
+      const alias = getAliasForJid(contact.jid);
+      if (!normalizedFilter) return true;
+      return (
+        contact.name.toLowerCase().includes(normalizedFilter) ||
+        contact.notify?.toLowerCase().includes(normalizedFilter) ||
+        contact.verifiedName?.toLowerCase().includes(normalizedFilter) ||
+        contact.jid.toLowerCase().includes(normalizedFilter) ||
+        alias?.toLowerCase().includes(normalizedFilter)
+      );
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
 function printChats(filter?: string): void {
   const normalizedFilter = filter?.toLowerCase();
   const sorted = getSortedChats().filter((chat) => {
     if (!normalizedFilter) return true;
     const alias = getAliasForJid(chat.jid);
+    const contactName = getContactName(chat.jid);
     return (
       chat.name.toLowerCase().includes(normalizedFilter) ||
       chat.jid.toLowerCase().includes(normalizedFilter) ||
+      contactName?.toLowerCase().includes(normalizedFilter) ||
       alias?.toLowerCase().includes(normalizedFilter)
     );
   });
 
   if (sorted.length === 0) {
-    console.log(chalk.yellow('Belum ada chat tersimpan. Tunggu pesan masuk atau pakai /send nomor pesan.'));
+    console.log(chalk.yellow('Belum ada chat tersimpan. Coba /contacts atau tunggu pesan masuk.'));
     return;
   }
 
   for (const [index, chat] of sorted.entries()) {
     const unread = chat.unread > 0 ? chalk.yellow(` (${chat.unread})`) : '';
     const alias = getAliasForJid(chat.jid);
-    const name = alias ? `${chat.name} ${chalk.gray(`@${alias}`)}` : chat.name;
+    const name = alias ? `${renderChatName(chat.jid)} ${chalk.gray(`@${alias}`)}` : renderChatName(chat.jid);
     console.log(
       `${chalk.cyan(`[${index + 1}]`)} ${name}${unread} ${chalk.gray(displayTime(chat.lastAt))}\n    ${chalk.gray(chat.lastMessage)}`,
     );
+  }
+}
+
+function printContacts(filter?: string): void {
+  const sorted = getSortedContacts(filter);
+
+  if (sorted.length === 0) {
+    console.log(chalk.yellow('Belum ada kontak tersimpan dari WhatsApp Web. Coba tunggu beberapa saat, buka WA HP, atau tunggu pesan masuk.'));
+    return;
+  }
+
+  const visible = sorted.slice(0, MAX_PRINTED_CONTACTS);
+  for (const [index, contact] of visible.entries()) {
+    const alias = getAliasForJid(contact.jid);
+    const aliasText = alias ? chalk.gray(` @${alias}`) : '';
+    const phone = contact.jid.replace('@s.whatsapp.net', '').replace('@g.us', '');
+    console.log(`${chalk.cyan(`[${index + 1}]`)} ${contact.name}${aliasText} ${chalk.gray(phone)}`);
+  }
+
+  if (sorted.length > visible.length) {
+    console.log(chalk.gray(`Menampilkan ${visible.length}/${sorted.length}. Pakai /contacts <nama> untuk filter.`));
   }
 }
 
@@ -190,9 +293,26 @@ function resolveChatByIndex(raw: string): string | null {
   return getSortedChats()[index - 1]?.jid ?? null;
 }
 
+function resolveContactByIndex(raw: string): string | null {
+  const index = Number(raw);
+  if (!Number.isInteger(index) || index < 1) return null;
+  return getSortedContacts()[index - 1]?.jid ?? null;
+}
+
+function resolveContactByName(raw: string): string | null {
+  const value = normalizeText(raw);
+  if (!value) return null;
+
+  const exact = getSortedContacts().find((contact) => normalizeText(contact.name) === value);
+  if (exact) return exact.jid;
+
+  const partial = getSortedContacts().find((contact) => normalizeText(contact.name).includes(value));
+  return partial?.jid ?? null;
+}
+
 function resolveTarget(raw: string): string {
   const value = raw.trim();
-  if (!value) throw new Error('Target kosong. Pakai nomor, index chat, JID, atau @alias.');
+  if (!value) throw new Error('Target kosong. Pakai nomor, index chat, nama kontak, JID, atau @alias.');
 
   if (value.startsWith('@')) {
     const alias = value.slice(1).toLowerCase();
@@ -201,10 +321,16 @@ function resolveTarget(raw: string): string {
     return jid;
   }
 
-  const indexed = resolveChatByIndex(value);
-  if (indexed) return indexed;
+  const chatIndexed = resolveChatByIndex(value);
+  if (chatIndexed) return chatIndexed;
+
+  const contactIndexed = resolveContactByIndex(value);
+  if (contactIndexed) return contactIndexed;
 
   if (value.includes('@s.whatsapp.net') || value.includes('@g.us')) return jidNormalizedUser(value);
+
+  const namedContact = resolveContactByName(value);
+  if (namedContact) return namedContact;
 
   return normalizePhoneToJid(value);
 }
@@ -217,7 +343,7 @@ function printConversation(jid: string): void {
   console.log(chalk.cyan(`\nMembuka chat: ${renderChatName(jid)}`));
   const list = messages.get(jid) ?? [];
   if (list.length === 0) {
-    console.log(chalk.gray('Belum ada pesan lokal untuk chat ini.'));
+    console.log(chalk.gray('Belum ada pesan lokal untuk chat ini. Pesan baru akan muncul setelah wa-cmd aktif.'));
     return;
   }
 
@@ -232,11 +358,12 @@ function printHelp(): void {
 ${chalk.cyan.bold('Command utama')}
   /help                         tampilkan bantuan
   /chats                        lihat chat terakhir
+  /contacts [nama]              lihat/cari kontak yang tersinkron
   /search <kata>                cari chat berdasarkan nama/JID/alias
-  /open <index|@alias|jid>      buka chat
+  /open <index|nama|@alias|jid> buka chat
   /close                        keluar dari chat aktif
-  /send <target> <pesan>        kirim pesan ke nomor/index/@alias/JID
-  /alias <index|jid|nomor> <a>  simpan alias lokal, contoh: /alias 1 raihan
+  /send <target> <pesan>        kirim pesan ke nomor/index/nama/@alias/JID
+  /alias <target> <alias>       simpan alias lokal, contoh: /alias 1 raihan
   /aliases                      lihat daftar alias
   /logout                       hapus session WhatsApp lokal
   /clear                        bersihkan layar
@@ -246,6 +373,8 @@ ${chalk.cyan.bold('Shortcut')}
   Saat chat sudah dibuka, ketik pesan biasa tanpa command untuk langsung mengirim.
 
 ${chalk.cyan.bold('Contoh')}
+  /contacts raihan
+  /open raihan
   /send 6281234567890 halo dari terminal
   /open 1
   /alias 1 bos
@@ -270,6 +399,7 @@ async function sendText(sock: ReturnType<typeof makeWASocket>, jid: string, text
   await sock.sendMessage(jid, content);
   const at = Date.now();
   upsertChat(jid, renderChatName(jid), text, true, at);
+  saveContacts();
   pushMessage({ jid, fromMe: true, senderName: 'Kamu', text, at });
   console.log(chalk.green('sent ✓'));
 }
@@ -285,6 +415,10 @@ async function handleCommand(sock: ReturnType<typeof makeWASocket>, line: string
 
     case '/chats':
       printChats();
+      return;
+
+    case '/contacts':
+      printContacts(args.join(' '));
       return;
 
     case '/search':
@@ -314,7 +448,7 @@ async function handleCommand(sock: ReturnType<typeof makeWASocket>, line: string
     case '/alias': {
       const target = args.shift();
       const alias = args.shift()?.toLowerCase();
-      if (!target || !alias) throw new Error('Format: /alias <index|jid|nomor> <alias>');
+      if (!target || !alias) throw new Error('Format: /alias <index|nama|jid|nomor> <alias>');
       if (!/^[a-z0-9_-]{2,30}$/.test(alias)) {
         throw new Error('Alias hanya boleh huruf kecil/angka/_/- minimal 2 karakter.');
       }
@@ -360,7 +494,7 @@ async function startPrompt(sock: ReturnType<typeof makeWASocket>): Promise<void>
       } else if (currentChatJid) {
         await sendText(sock, currentChatJid, line);
       } else {
-        console.log(chalk.yellow('Buka chat dulu dengan /open <index> atau kirim dengan /send <target> <pesan>.'));
+        console.log(chalk.yellow('Buka chat dulu dengan /open <index|nama> atau kirim dengan /send <target> <pesan>.'));
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -388,6 +522,16 @@ async function connect(): Promise<void> {
 
   sock.ev.on('creds.update', saveCreds);
 
+  sock.ev.on('contacts.upsert', (items: unknown[]) => {
+    for (const raw of items) {
+      const item = raw as { id?: string; jid?: string; name?: string; notify?: string; verifiedName?: string };
+      const jid = item.id ?? item.jid;
+      if (!jid) continue;
+      upsertContact(jid, item.name, item.notify, item.verifiedName);
+    }
+    saveContacts();
+  });
+
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
@@ -399,7 +543,7 @@ async function connect(): Promise<void> {
     if (connection === 'open') {
       reconnecting = false;
       console.log(chalk.green('Connected ✓'));
-      console.log(chalk.gray('Ketik /help untuk mulai.'));
+      console.log(chalk.gray('Ketik /help untuk mulai. Pakai /contacts untuk lihat kontak yang tersinkron.'));
     }
 
     if (connection === 'close') {
@@ -427,10 +571,11 @@ async function connect(): Promise<void> {
       if (!text) continue;
 
       const at = Number(item.messageTimestamp ?? Math.floor(Date.now() / 1000)) * 1000;
-      const senderName = fromMe ? 'Kamu' : item.pushName || 'Dia';
+      const senderName = fromMe ? 'Kamu' : item.pushName || renderChatName(remoteJid) || 'Dia';
       const name = item.pushName || renderChatName(remoteJid);
 
       upsertChat(remoteJid, name, text, fromMe, at);
+      saveContacts();
       pushMessage({ jid: remoteJid, fromMe, senderName, text, at });
 
       if (!fromMe) {
