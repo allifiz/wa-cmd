@@ -145,10 +145,29 @@ Baileys berjalan sebagai companion WhatsApp Web. Artinya kontak yang muncul berg
 
 Kalau `/contacts` masih kosong, coba tunggu beberapa saat setelah `Connected ✓`, kirim pesan dari HP lain ke akunmu, atau buka kontak tersebut dari WhatsApp HP lalu jalankan ulang `wa-cmd`.
 
+## Kalau muncul `Bad MAC` / gagal decrypt
+
+Kadang Baileys/libsignal gagal decrypt pesan tertentu karena session key belum sinkron, pesan lama di-retry, atau Linked Device sempat bentrok. Di versi ini log noisy seperti `Failed to decrypt message with any known session` dan `Bad MAC` sudah disembunyikan supaya terminal tetap bersih.
+
+Kalau pesan baru tetap tidak kebaca terus-menerus, reset session:
+
+```txt
+/logout
+```
+
+Lalu hapus device `WA CMD` dari WhatsApp HP:
+
+```txt
+Settings > Linked devices > pilih WA CMD > Log out
+```
+
+Setelah itu jalankan lagi `wa-cmd` dan scan QR ulang.
+
 ## Batasan v0.2
 
 - Belum tentu semua kontak HP mentah langsung muncul seperti aplikasi Contacts Android.
 - Belum sync semua history WhatsApp.
+- Beberapa pesan lama/retry bisa gagal decrypt di Baileys.
 - Belum support kirim gambar/file.
 - UI terminal bisa agak berantakan kalau pesan masuk saat kamu sedang mengetik.
 
