@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import './quiet-logs.js';
 import makeWASocket, {
   DisconnectReason,
   fetchLatestBaileysVersion,
