@@ -29,6 +29,7 @@ const interestingKeys = new Set([
   'stickerMessage',
   'editedMessage',
   'protocolMessage',
+  'messageContextInfo',
 ]);
 
 function keysOf(value: unknown): string[] {
@@ -36,17 +37,49 @@ function keysOf(value: unknown): string[] {
   return Object.keys(value as Record<string, unknown>);
 }
 
+function valueType(value: unknown): string {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return `array(${value.length})`;
+  return typeof value;
+}
+
 function pickFlags(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== 'object') return undefined;
   const obj = value as Record<string, unknown>;
   const flags: Record<string, unknown> = {};
-  for (const key of ['viewOnce', 'mimetype', 'caption', 'seconds']) {
+  for (const key of ['viewOnce', 'mimetype', 'caption', 'seconds', 'expiration', 'ephemeralSettingTimestamp', 'deviceListMetadataVersion']) {
     if (key in obj) flags[key] = obj[key];
   }
-  for (const key of ['url', 'directPath', 'mediaKey', 'fileSha256', 'fileEncSha256', 'jpegThumbnail']) {
+  for (const key of ['url', 'directPath', 'mediaKey', 'fileSha256', 'fileEncSha256', 'jpegThumbnail', 'deviceListMetadata']) {
     if (key in obj) flags[`${key}Present`] = Boolean(obj[key]);
   }
   return Object.keys(flags).length ? flags : undefined;
+}
+
+function summarizeValue(value: unknown): unknown {
+  if (value === null || value === undefined) return value;
+  if (Buffer.isBuffer(value)) return `<Buffer ${value.length} bytes>`;
+  if (Array.isArray(value)) return value.slice(0, 5).map(summarizeValue);
+  if (typeof value !== 'object') return value;
+
+  const obj = value as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(obj)) {
+    if (['mediaKey', 'fileSha256', 'fileEncSha256', 'jpegThumbnail'].includes(key)) {
+      out[`${key}Present`] = Boolean(child);
+      continue;
+    }
+    if (key === 'url' || key === 'directPath') {
+      out[`${key}Present`] = Boolean(child);
+      continue;
+    }
+    if (typeof child === 'object' && child !== null) {
+      out[key] = { type: valueType(child), keys: keysOf(child) };
+      continue;
+    }
+    out[key] = child;
+  }
+  return out;
 }
 
 function walk(value: unknown, currentPath = 'message', depth = 0, found: FoundNode[] = []): FoundNode[] {
@@ -79,6 +112,7 @@ function detectViewOnce(msg?: proto.IMessage | null): boolean {
 
 function printMessage(raw: proto.IWebMessageInfo): void {
   const msg = raw.message;
+  const rawObj = raw as Record<string, unknown>;
   const at = Number(raw.messageTimestamp ?? Math.floor(Date.now() / 1000)) * 1000;
   const header = {
     time: new Date(at).toISOString(),
@@ -86,12 +120,23 @@ function printMessage(raw: proto.IWebMessageInfo): void {
     fromMe: raw.key.fromMe,
     id: raw.key.id,
     pushName: raw.pushName,
+    outerKeys: Object.keys(rawObj),
     topLevelKeys: keysOf(msg),
+    messageType: valueType(msg),
+    messageIsEmptyObject: Boolean(msg && typeof msg === 'object' && Object.keys(msg).length === 0),
     detectedViewOnce: detectViewOnce(msg),
+    messageStubType: rawObj.messageStubType,
+    messageStubParameters: rawObj.messageStubParameters,
+    status: rawObj.status,
+    participant: rawObj.participant,
   };
 
   console.log(chalk.cyan('\n=== messages.upsert ==='));
   console.log(JSON.stringify(header, null, 2));
+
+  if (msg && typeof msg === 'object' && Object.keys(msg).length === 0) {
+    console.log(chalk.red('message is empty object: event masuk, tapi isi media/text tidak dikirim ke session ini.'));
+  }
 
   const found = walk(msg ?? {}, 'message');
   for (const item of found) {
@@ -99,6 +144,9 @@ function printMessage(raw: proto.IWebMessageInfo): void {
     console.log(`  keys: ${item.keys.join(', ') || '(none)'}`);
     if (item.flags) console.log(`  flags: ${JSON.stringify(item.flags)}`);
   }
+
+  console.log(chalk.gray('safe top-level summary:'));
+  console.log(JSON.stringify(summarizeValue(rawObj), null, 2));
 }
 
 async function connect(): Promise<void> {
@@ -112,7 +160,7 @@ async function connect(): Promise<void> {
     version,
     logger,
     printQRInTerminal: false,
-    browser: ['WA CMD Debug', 'Chrome', '0.1.0'],
+    browser: ['WA CMD Debug', 'Chrome', '0.2.0'],
     markOnlineOnConnect: false,
     syncFullHistory: false,
   });
