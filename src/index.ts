@@ -81,8 +81,20 @@ function phoneToJid(s: string): string {
   return `${n}@s.whatsapp.net`;
 }
 
-function textOf(m?: proto.IMessage | null): string {
+function unwrapMessage(m?: proto.IMessage | null): proto.IMessage | null {
+  if (!m) return null;
+  const anyMsg = m as any;
+  return anyMsg.ephemeralMessage?.message
+    ?? anyMsg.viewOnceMessage?.message
+    ?? anyMsg.viewOnceMessageV2?.message
+    ?? anyMsg.documentWithCaptionMessage?.message
+    ?? m;
+}
+
+function textOf(raw?: proto.IMessage | null): string {
+  const m = unwrapMessage(raw);
   if (!m) return '';
+  const anyMsg = m as any;
   if (m.conversation) return m.conversation;
   if (m.extendedTextMessage?.text) return m.extendedTextMessage.text;
   if (m.imageMessage?.caption) return `[image] ${m.imageMessage.caption}`;
@@ -90,12 +102,13 @@ function textOf(m?: proto.IMessage | null): string {
   if (m.documentMessage?.caption) return `[document] ${m.documentMessage.caption}`;
   if (m.buttonsResponseMessage?.selectedDisplayText) return `[button] ${m.buttonsResponseMessage.selectedDisplayText}`;
   if (m.listResponseMessage?.title) return `[list] ${m.listResponseMessage.title}`;
+  if (anyMsg.templateButtonReplyMessage?.selectedDisplayText) return `[template] ${anyMsg.templateButtonReplyMessage.selectedDisplayText}`;
   if (m.imageMessage) return '[image]';
   if (m.videoMessage) return '[video]';
   if (m.audioMessage) return '[audio]';
   if (m.stickerMessage) return '[sticker]';
   if (m.documentMessage) return '[document]';
-  return '[unsupported message]';
+  return '';
 }
 
 function aliasOf(jid: string): string | null { return Object.entries(aliases).find(([, v]) => v === jid)?.[0] ?? null; }
@@ -124,7 +137,7 @@ function pushMsg(m: StoredMessage): void {
   messages.set(m.jid, list.slice(-MAX_MSG));
 }
 
-function sortedChats(): ChatItem[] { return [...chats.values()].sort((a, b) => b.lastAt - a.lastAt); }
+function sortedChats(): ChatItem[] { return [...chats.values()].filter((c) => c.lastMessage && c.lastMessage !== '[unsupported message]').sort((a, b) => b.lastAt - a.lastAt); }
 function mergedContacts(): ContactItem[] {
   const m = new Map<string, ContactItem>(contacts);
   for (const ch of chats.values()) if (!m.has(ch.jid)) m.set(ch.jid, { jid: ch.jid, name: ch.name, updatedAt: ch.lastAt });
@@ -170,7 +183,7 @@ function renderList(): void {
   console.log(chalk.cyan.bold(`${title} page ${page + 1}/${maxPage() + 1}`));
   console.log('');
   const items = pageItems();
-  if (!items.length) console.log(chalk.yellow('Kosong. Coba keyword lain, import VCF, atau tunggu pesan masuk.'));
+  if (!items.length) console.log(chalk.yellow(mode === 'inbox' ? 'Inbox recent chat masih kosong. Pakai c <nama> untuk kontak, s <nama> untuk search, atau tunggu pesan masuk.' : 'Kosong. Coba keyword lain, import VCF, atau tunggu pesan masuk.'));
   items.forEach((x, i) => { console.log(`${chalk.cyan(`[${i + 1}]`)} ${short(x.name, 30)} ${chalk.gray(x.source)}`); console.log(`    ${chalk.gray(short(x.subtitle, 60))}`); });
   console.log('');
 }
@@ -182,7 +195,7 @@ function renderChat(): void {
   console.log(chalk.cyan.bold(`Chat: ${nameOf(currentChat)}`));
   console.log(chalk.gray('Ketik pesan langsung. b/back kembali.'));
   console.log('');
-  const list = (messages.get(currentChat) ?? []).slice(-30);
+  const list = (messages.get(currentChat) ?? []).filter((m) => m.text && m.text !== '[unsupported message]').slice(-30);
   if (!list.length) console.log(chalk.gray('Belum ada pesan lokal untuk chat ini.'));
   for (const m of list) console.log(`${chalk.gray(time(m.at))} ${m.fromMe ? chalk.green('kamu') : chalk.magenta(m.senderName || 'dia')}: ${m.text}`);
   console.log('');
@@ -292,7 +305,7 @@ async function connect(): Promise<void> {
   if (!fs.existsSync(AUTH)) fs.mkdirSync(AUTH, { recursive: true });
   const { state, saveCreds } = await useMultiFileAuthState(AUTH);
   const { version } = await fetchLatestBaileysVersion();
-  const sock = makeWASocket({ auth: state, version, logger, printQRInTerminal: false, browser: ['WA CMD', 'Chrome', '0.3.0'], markOnlineOnConnect: false, syncFullHistory: false });
+  const sock = makeWASocket({ auth: state, version, logger, printQRInTerminal: false, browser: ['WA CMD', 'Chrome', '0.3.1'], markOnlineOnConnect: false, syncFullHistory: false });
 
   sock.ev.on('creds.update', saveCreds);
   sock.ev.on('contacts.upsert', (items: unknown[]) => { for (const raw of items) { const x = raw as { id?: string; jid?: string; name?: string; notify?: string; verifiedName?: string }; const jid = x.id ?? x.jid; if (jid) upsertContact(jid, x.name, x.notify, x.verifiedName); } saveData(); });
@@ -310,7 +323,8 @@ async function connect(): Promise<void> {
     for (const m of incoming) {
       const jid = m.key.remoteJid;
       if (!jid || jid === 'status@broadcast') continue;
-      const text = textOf(m.message); if (!text) continue;
+      const text = textOf(m.message);
+      if (!text) continue;
       const fromMe = Boolean(m.key.fromMe);
       const at = Number(m.messageTimestamp ?? Math.floor(Date.now() / 1000)) * 1000;
       const senderName = fromMe ? 'kamu' : m.pushName || nameOf(jid);
