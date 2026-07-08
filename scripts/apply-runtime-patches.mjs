@@ -24,10 +24,12 @@ patchOnce('node-notifier import', (s) => {
 });
 
 patchOnce('windows toaster notifier', (s) => {
-  return s.replace(
+  let out = s.replace(
     "const notifier = require('node-notifier');",
-    "const notifierPkg = require('node-notifier');\nconst WindowsToaster = notifierPkg.WindowsToaster;\nconst notifier = process.platform === 'win32' && WindowsToaster ? new WindowsToaster({ withFallback: true }) : notifierPkg;"
+    "const notifierPkg = require('node-notifier');\nconst WindowsToaster = notifierPkg.WindowsToaster;\nconst notifier = process.platform === 'win32' && WindowsToaster ? new WindowsToaster({ withFallback: false }) : notifierPkg;"
   );
+  out = out.replace('new WindowsToaster({ withFallback: true })', 'new WindowsToaster({ withFallback: false })');
+  return out;
 });
 
 patchOnce('native notification', (s) => {
