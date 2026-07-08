@@ -191,6 +191,34 @@ function getImageMessage(raw?: proto.IMessage | null): { caption?: string; once:
   return { caption: m.imageMessage.caption ?? undefined, once };
 }
 
+function getContextInfo(raw?: proto.IMessage | null): any | null {
+  const m = unwrapMessage(raw) as any;
+  if (!m) return null;
+  return m.extendedTextMessage?.contextInfo
+    ?? m.imageMessage?.contextInfo
+    ?? m.videoMessage?.contextInfo
+    ?? m.documentMessage?.contextInfo
+    ?? m.buttonsResponseMessage?.contextInfo
+    ?? m.listResponseMessage?.contextInfo
+    ?? null;
+}
+
+function getQuotedMessage(rawMessage: any, jid: string): any | null {
+  const context = getContextInfo(rawMessage?.message);
+  const quotedMessage = context?.quotedMessage;
+  if (!quotedMessage) return null;
+  return {
+    key: {
+      remoteJid: jid,
+      id: context.stanzaId,
+      participant: context.participant,
+      fromMe: false,
+    },
+    message: quotedMessage,
+    messageTimestamp: rawMessage.messageTimestamp,
+  };
+}
+
 function aliasOf(jid: string): string | null { return Object.entries(aliases).find(([, v]) => v === jid)?.[0] ?? null; }
 function contactName(jid: string): string | null {
   const c = contacts.get(jid);
@@ -227,23 +255,30 @@ function addMedia(item: Omit<MediaItem, 'id'>): MediaItem {
 }
 
 async function saveIncomingImage(sock: ReturnType<typeof makeWASocket>, rawMessage: any, jid: string, fromMe: boolean, senderName: string, at: number): Promise<MediaSaveResult | null> {
-  const info = getImageMessage(rawMessage.message);
+  const directInfo = getImageMessage(rawMessage.message);
+  const quotedRawMessage = directInfo ? null : getQuotedMessage(rawMessage, jid);
+  const info = directInfo ?? getImageMessage(quotedRawMessage?.message);
   if (!info) return null;
+  const downloadTarget = directInfo ? rawMessage : quotedRawMessage;
+  const quoted = Boolean(quotedRawMessage);
+
   try {
     ensureImages();
-    const buffer = await downloadMediaMessage(rawMessage, 'buffer', {}, { logger, reuploadRequest: sock.updateMediaMessage } as any) as Buffer;
+    const buffer = await downloadMediaMessage(downloadTarget, 'buffer', {}, { logger, reuploadRequest: sock.updateMediaMessage } as any) as Buffer;
     const kind: MediaKind = info.once ? 'view-once-image' : 'image';
     const id = nextMediaId;
     const dir = info.once ? VIEW_ONCE_DIR : IMAGE_DIR;
-    const fileName = `${info.once ? 'view-once' : 'image'}-${String(id).padStart(4, '0')}-${safeFilePart(jid)}-${at}.jpg`;
+    const prefix = quoted ? 'quoted-' : '';
+    const fileName = `${prefix}${info.once ? 'view-once' : 'image'}-${String(id).padStart(4, '0')}-${safeFilePart(jid)}-${at}.jpg`;
     const filePath = path.join(dir, fileName);
     fs.writeFileSync(filePath, buffer);
     const item = addMedia({ jid, kind, filePath, caption: info.caption, fromMe, senderName, at });
-    const label = info.once ? `view-once image #v${item.id}` : `image #${item.id}`;
+    const label = info.once ? `${quoted ? 'quoted ' : ''}view-once image #v${item.id}` : `${quoted ? 'quoted ' : ''}image #${item.id}`;
     const caption = info.caption ? ` ${info.caption}` : '';
     return { text: `[${label}]${caption}`, item };
   } catch {
-    return { text: info.once ? '[view-once image: gagal download]' : '[image: gagal download]' };
+    const prefix = quoted ? 'quoted ' : '';
+    return { text: info.once ? `[${prefix}view-once image: gagal download]` : `[${prefix}image: gagal download]` };
   }
 }
 
@@ -420,7 +455,7 @@ function viewOnceStatus(): void {
 function listViewOnce(): void {
   const items = [...media.values()].filter((x) => x.kind === 'view-once-image').sort((a, b) => b.at - a.at);
   if (!items.length) {
-    console.log(chalk.yellow('Belum ada view-once tersimpan. Fitur hanya menangkap view-once yang masuk saat wa-cmd aktif.'));
+    console.log(chalk.yellow('Belum ada view-once tersimpan. Kirim view-once saat wa-cmd aktif, atau reply/quote view-once dari HP dengan teks apa pun.'));
     return;
   }
   for (const item of items.slice(0, 20)) {
@@ -530,7 +565,7 @@ async function connect(): Promise<void> {
       const senderName = fromMe ? 'kamu' : m.pushName || nameOf(jid);
       const chatName = fromMe ? nameOf(jid) : m.pushName || nameOf(jid);
       const mediaResult = await saveIncomingImage(sock, m as any, jid, fromMe, senderName, at);
-      if (!fromMe) await forwardViewOnceIfEnabled(sock, mediaResult?.item);
+      if (mediaResult?.item?.kind === 'view-once-image') await forwardViewOnceIfEnabled(sock, mediaResult.item);
       const text = mediaResult?.text ?? textOf(m.message);
       if (!text) continue;
       upsertChat(jid, chatName, text, fromMe, at);
