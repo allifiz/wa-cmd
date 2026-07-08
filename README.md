@@ -2,9 +2,9 @@
 
 WhatsApp ringan di terminal/CMD, dibuat pakai [Baileys](https://github.com/WhiskeySockets/Baileys).
 
-> Catatan: ini client unofficial untuk eksperimen pribadi. Jangan pakai untuk spam, broadcast massal, scraping, atau aktivitas yang melanggar aturan WhatsApp. Folder `auth/` berisi session sensitif dan jangan pernah di-commit.
+> Catatan: ini client unofficial untuk eksperimen pribadi. Jangan pakai untuk spam, broadcast massal, scraping, atau aktivitas yang melanggar aturan WhatsApp. Folder `auth/` berisi session sensitif dan jangan pernah di-commit. Fitur view-once hanya gunakan untuk chat milik sendiri atau dengan izin.
 
-## Fitur v0.3
+## Fitur v0.4
 
 - Login QR langsung dari terminal
 - Semi-TUI: inbox otomatis, pagination 10 item per halaman
@@ -17,6 +17,10 @@ WhatsApp ringan di terminal/CMD, dibuat pakai [Baileys](https://github.com/Whisk
 - Alias lokal, misalnya `@bot`, `@matcha`, `@bos`
 - Import kontak HP dari `.vcf`
 - Cache lokal untuk contacts, recent chats, dan pesan terakhir
+- Simpan foto yang masuk ke `data/media/images`
+- Anti-viewonce lokal: foto view-once yang masuk saat app aktif otomatis disimpan sementara ke `data/media/images/view-once`
+- Command `/viewonce` atau `/vo` untuk status, list, buka, dan auto-forward foto view-once
+- Shortcut `v <media-id>` untuk membuka foto tersimpan
 
 ## Requirement
 
@@ -81,6 +85,11 @@ b / back              kembali ke inbox
 s <kata>              search chat + kontak
 c <kata>              filter contacts
 r <no> <pesan>        quick reply ke item di halaman aktif
+v <media-id>          buka foto/media tersimpan, contoh v1, v 7, vv12
+vo                    cek status anti-viewonce
+vo list               list view-once tersimpan
+vo set <target>       auto-forward view-once ke target
+vo off                matikan auto-forward view-once
 @alias <pesan>        quick send ke alias
 q                     keluar
 ```
@@ -96,6 +105,13 @@ q                     keluar
 /send <target> <pesan>       kirim pesan
 /alias <target> <alias>      simpan alias lokal
 /aliases                     lihat daftar alias
+/view <media-id>             buka foto/media tersimpan
+/viewonce status             cek status anti-viewonce
+/viewonce set <target>       auto-forward view-once ke target
+/viewonce off                matikan auto-forward view-once
+/viewonce list               daftar view-once tersimpan
+/viewonce open <id>          buka view-once tersimpan
+/vo ...                      alias singkat untuk /viewonce
 /logout                      hapus session WhatsApp lokal
 /clear                       render ulang layar
 /exit                        keluar
@@ -142,16 +158,74 @@ n
 p
 ```
 
+## Anti-viewonce
+
+WA CMD akan mencoba menyimpan foto view-once yang masuk saat app sedang aktif. File tersimpan sementara di:
+
+```txt
+data/media/images/view-once
+```
+
+Cek status:
+
+```txt
+/vo
+/viewonce status
+```
+
+Lihat daftar view-once yang berhasil disimpan:
+
+```txt
+/vo list
+/viewonce list
+```
+
+Buka view-once tersimpan:
+
+```txt
+v1
+/viewonce open v1
+```
+
+Aktifkan auto-forward ke chat tertentu:
+
+```txt
+/viewonce set 6281234567890
+```
+
+Atau pakai alias/kontak yang sudah dikenal wa-cmd:
+
+```txt
+/alias 1 me
+/viewonce set @me
+```
+
+Matikan auto-forward:
+
+```txt
+/viewonce off
+```
+
+Catatan:
+
+- Fitur ini hanya menangkap view-once yang masuk saat `wa-cmd` aktif.
+- File view-once akan dibersihkan saat app keluar/logout, mengikuti perilaku temporary cache.
+- Auto-forward target disimpan di `data/settings.json`.
+
 ## Data lokal
 
 File/folder yang dibuat otomatis:
 
 ```txt
-auth/                session WhatsApp lokal
-data/aliases.json    alias lokal
-data/contacts.json   cache kontak lokal hasil sync/import VCF
-data/chats.json      cache recent chats lokal
-data/messages.json   cache pesan lokal terakhir per chat
+auth/                         session WhatsApp lokal
+data/aliases.json             alias lokal
+data/settings.json            setting lokal, termasuk target auto-forward view-once
+data/contacts.json            cache kontak lokal hasil sync/import VCF
+data/chats.json               cache recent chats lokal
+data/messages.json            cache pesan lokal terakhir per chat
+data/media.json               index media lokal
+data/media/images/            foto yang masuk saat app aktif
+data/media/images/view-once/  foto view-once temporary saat app aktif
 ```
 
 Folder `auth/` dan `data/` sudah masuk `.gitignore`.
@@ -184,12 +258,13 @@ Settings > Linked devices > pilih WA CMD > Log out
 
 Setelah itu jalankan lagi `wa-cmd` dan scan QR ulang.
 
-## Batasan v0.3
+## Batasan v0.4
 
 - Belum sync semua isi history lama WhatsApp.
 - Beberapa pesan lama/retry bisa gagal decrypt di Baileys.
-- Belum support kirim gambar/file.
+- Belum support kirim gambar/file manual dari terminal.
 - UI terminal bisa agak berantakan kalau pesan masuk tepat saat mengetik.
+- View-once hanya bisa disimpan kalau pesan masuk saat app aktif dan berhasil didecrypt oleh Baileys.
 
 ## Roadmap ide berikutnya
 
