@@ -37,6 +37,7 @@ const FILES = {
 const PAGE_SIZE = 10;
 const MAX_MSG = 80;
 const DUPLICATE_WINDOW_MS = 3000;
+const NOTIFICATION_COOLDOWN_MS = 1200;
 
 const chats = new Map<string, ChatItem>();
 const contacts = new Map<string, ContactItem>();
@@ -52,6 +53,7 @@ let currentChat: string | null = null;
 let activeList: ListItem[] = [];
 let reconnecting = false;
 let lastRender = 0;
+let lastNotificationAt = 0;
 
 const logger = P({ level: 'silent' });
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -403,6 +405,35 @@ function openPath(filePath: string): void {
   spawn(command, args, { detached: true, stdio: 'ignore' }).unref();
 }
 
+function psQuote(s: string): string { return s.replace(/'/g, "''"); }
+function terminalBell(): void { try { process.stdout.write('\x07'); } catch { /* ignore */ } }
+function windowsBalloon(title: string, message: string): void {
+  if (process.platform !== 'win32') return;
+  const safeTitle = psQuote(short(title.replace(/[\r\n]+/g, ' '), 64));
+  const safeMessage = psQuote(short(message.replace(/[\r\n]+/g, ' '), 180));
+  const script = `
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$notify = New-Object System.Windows.Forms.NotifyIcon
+$notify.Icon = [System.Drawing.SystemIcons]::Information
+$notify.BalloonTipTitle = '${safeTitle}'
+$notify.BalloonTipText = '${safeMessage}'
+$notify.Visible = $true
+$notify.ShowBalloonTip(4000)
+Start-Sleep -Milliseconds 4500
+$notify.Dispose()
+`;
+  const encoded = Buffer.from(script, 'utf16le').toString('base64');
+  spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-EncodedCommand', encoded], { detached: true, stdio: 'ignore' }).unref();
+}
+function notifyNewMessage(sender: string, message: string): void {
+  const now = Date.now();
+  if (now - lastNotificationAt < NOTIFICATION_COOLDOWN_MS) return;
+  lastNotificationAt = now;
+  terminalBell();
+  windowsBalloon('WA CMD', `${sender}: ${message}`);
+}
+
 function openMedia(idRaw: string): void {
   const cleaned = idRaw.trim().replace(/^#?v/i, '');
   const id = Number(cleaned);
@@ -571,6 +602,7 @@ async function connect(): Promise<void> {
       upsertChat(jid, chatName, text, fromMe, at);
       pushMsg({ jid, fromMe, senderName, text, at });
       changed = true;
+      if (!fromMe && currentChat !== jid) notifyNewMessage(nameOf(jid), text);
       if (!fromMe && mode !== 'chat') console.log(`\n${chalk.cyan('new')} ${chalk.bold(nameOf(jid))} ${chalk.gray(time(at))}: ${text}`);
     }
     if (changed) { saveData(); if (Date.now() - lastRender > 1500 && (mode === 'inbox' || mode === 'chat')) render(); }
