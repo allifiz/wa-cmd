@@ -14,6 +14,7 @@ type ChatItem = { jid: string; name: string; lastMessage: string; lastAt: number
 type StoredMessage = { jid: string; fromMe: boolean; senderName: string; text: string; at: number };
 type ContactItem = { jid: string; name: string; notify?: string; verifiedName?: string; updatedAt: number };
 type AliasStore = Record<string, string>;
+type JidLinkStore = Record<string, string>;
 type SettingsStore = { viewOnceForwardJid?: string };
 type MediaKind = 'image' | 'view-once-image';
 type MediaItem = { id: number; jid: string; kind: MediaKind; filePath: string; caption?: string; fromMe: boolean; senderName: string; at: number };
@@ -28,6 +29,7 @@ const IMAGE_DIR = path.join(DATA, 'media', 'images');
 const VIEW_ONCE_DIR = path.join(IMAGE_DIR, 'view-once');
 const FILES = {
   aliases: path.join(DATA, 'aliases.json'),
+  jidLinks: path.join(DATA, 'jid-links.json'),
   contacts: path.join(DATA, 'contacts.json'),
   chats: path.join(DATA, 'chats.json'),
   messages: path.join(DATA, 'messages.json'),
@@ -38,11 +40,13 @@ const PAGE_SIZE = 10;
 const MAX_MSG = 80;
 const DUPLICATE_WINDOW_MS = 3000;
 const NOTIFICATION_COOLDOWN_MS = 1200;
+const LID_REPLY_LINK_WINDOW_MS = 15 * 60 * 1000;
 
 const chats = new Map<string, ChatItem>();
 const contacts = new Map<string, ContactItem>();
 const messages = new Map<string, StoredMessage[]>();
 const media = new Map<number, MediaItem>();
+const jidLinks = new Map<string, string>();
 let aliases: AliasStore = {};
 let settings: SettingsStore = {};
 let nextMediaId = 1;
@@ -88,7 +92,7 @@ function isSameMessage(a: StoredMessage, b: StoredMessage): boolean {
 
 function dedupeMessageList(list: StoredMessage[]): StoredMessage[] {
   const clean: StoredMessage[] = [];
-  for (const item of list) {
+  for (const item of list.sort((a, b) => a.at - b.at)) {
     if (!item.text || item.text === '[unsupported message]') continue;
     const exists = clean.some((old) => isSameMessage(old, item));
     if (!exists) clean.push(item);
@@ -99,15 +103,22 @@ function dedupeMessageList(list: StoredMessage[]): StoredMessage[] {
 function loadData(): void {
   aliases = readJson<AliasStore>(FILES.aliases, {});
   settings = readJson<SettingsStore>(FILES.settings, {});
+  for (const [from, to] of Object.entries(readJson<JidLinkStore>(FILES.jidLinks, {}))) {
+    const a = jidNormalizedUser(from);
+    const b = jidNormalizedUser(to);
+    if (a && b && a !== b) jidLinks.set(a, b);
+  }
   for (const c of Object.values(readJson<Record<string, ContactItem>>(FILES.contacts, {}))) if (c.jid) contacts.set(c.jid, c);
   for (const c of Object.values(readJson<Record<string, ChatItem>>(FILES.chats, {}))) if (c.jid) chats.set(c.jid, c);
   for (const [jid, list] of Object.entries(readJson<Record<string, StoredMessage[]>>(FILES.messages, {}))) messages.set(jid, dedupeMessageList(list));
   for (const item of Object.values(readJson<Record<string, MediaItem>>(FILES.media, {}))) if (item.id && item.filePath) media.set(item.id, item);
+  repairJidLinksFromHistory();
   nextMediaId = Math.max(0, ...media.keys()) + 1;
 }
 
 function saveData(): void {
   writeJson(FILES.aliases, aliases);
+  writeJson(FILES.jidLinks, Object.fromEntries(jidLinks));
   writeJson(FILES.settings, settings);
   writeJson(FILES.contacts, Object.fromEntries(contacts));
   writeJson(FILES.chats, Object.fromEntries(chats));
@@ -130,6 +141,110 @@ function phoneToJid(s: string): string {
   const n = s.replace(/[^0-9]/g, '');
   if (!n) throw new Error(`Target "${s}" belum ketemu. Coba s <nama>, c <nama>, nomor 628xxx, atau @alias.`);
   return `${n}@s.whatsapp.net`;
+}
+function isLidJid(jid: string): boolean { return jid.endsWith('@lid'); }
+function isPhoneJid(jid: string): boolean { return jid.endsWith('@s.whatsapp.net'); }
+function isOneToOneJid(jid: string): boolean { return isPhoneJid(jid) || isLidJid(jid); }
+
+function rootJid(jid: string): string {
+  let cur = jidNormalizedUser(jid);
+  if (!cur) return jid;
+  const seen = new Set<string>();
+  while (jidLinks.has(cur) && !seen.has(cur)) {
+    seen.add(cur);
+    cur = jidLinks.get(cur) ?? cur;
+  }
+  return cur;
+}
+
+function latestMessageAt(jid: string, fromMe?: boolean): number {
+  const list = messages.get(jid) ?? [];
+  const filtered = fromMe === undefined ? list : list.filter((m) => m.fromMe === fromMe);
+  return Math.max(0, ...filtered.map((m) => m.at));
+}
+
+function mergeJidData(fromRaw: string, toRaw: string): string {
+  const from = jidNormalizedUser(fromRaw);
+  const to = jidNormalizedUser(toRaw);
+  if (!from || !to || from === to) return to ?? from ?? fromRaw;
+  const canonical = rootJid(to);
+  if (from === canonical) return canonical;
+
+  jidLinks.set(from, canonical);
+
+  const fromChat = chats.get(from);
+  const toChat = chats.get(canonical);
+  if (fromChat || toChat) {
+    const newest = !toChat || (fromChat && fromChat.lastAt > toChat.lastAt) ? fromChat : toChat;
+    const preferredName = contactName(canonical) ?? aliasOf(canonical)?.replace(/^/, '@') ?? toChat?.name ?? fromChat?.name ?? canonical;
+    chats.set(canonical, {
+      jid: canonical,
+      name: preferredName,
+      lastMessage: newest?.lastMessage ?? '',
+      lastAt: newest?.lastAt ?? Date.now(),
+      unread: (toChat?.unread ?? 0) + (fromChat?.unread ?? 0),
+    });
+    chats.delete(from);
+  }
+
+  const fromMsgs = messages.get(from) ?? [];
+  if (fromMsgs.length) {
+    const moved = fromMsgs.map((m) => ({ ...m, jid: canonical }));
+    messages.set(canonical, dedupeMessageList([...(messages.get(canonical) ?? []), ...moved]));
+    messages.delete(from);
+  }
+
+  for (const item of media.values()) if (item.jid === from) item.jid = canonical;
+  for (const [alias, jid] of Object.entries(aliases)) if (jid === from) aliases[alias] = canonical;
+  if (settings.viewOnceForwardJid === from) settings.viewOnceForwardJid = canonical;
+  if (currentChat === from) currentChat = canonical;
+
+  return canonical;
+}
+
+function searchableNames(jid: string): string[] {
+  const c = contacts.get(jid);
+  const ch = chats.get(jid);
+  return [c?.name, c?.notify, c?.verifiedName, ch?.name, aliasOf(jid)].filter(Boolean) as string[];
+}
+
+function findLikelyCanonicalForIncoming(rawJid: string, pushName: string | undefined, at: number): string {
+  const id = jidNormalizedUser(rawJid);
+  if (!id) return rawJid;
+  const linked = rootJid(id);
+  if (linked !== id) return linked;
+  if (!isLidJid(id)) return id;
+
+  const push = norm(pushName ?? '');
+  if (push) {
+    const byName = [...chats.keys(), ...contacts.keys()]
+      .map((jid) => rootJid(jid))
+      .filter((jid, i, arr) => arr.indexOf(jid) === i && jid !== id && isPhoneJid(jid))
+      .find((jid) => searchableNames(jid).some((name) => norm(name) === push));
+    if (byName) return mergeJidData(id, byName);
+  }
+
+  const recentOutgoing = [...chats.keys()]
+    .map((jid) => rootJid(jid))
+    .filter((jid, i, arr) => arr.indexOf(jid) === i && jid !== id && isPhoneJid(jid))
+    .map((jid) => ({ jid, outAt: latestMessageAt(jid, true) }))
+    .filter((x) => x.outAt > 0 && at >= x.outAt && at - x.outAt <= LID_REPLY_LINK_WINDOW_MS)
+    .sort((a, b) => b.outAt - a.outAt)[0];
+
+  return recentOutgoing ? mergeJidData(id, recentOutgoing.jid) : id;
+}
+
+function repairJidLinksFromHistory(): void {
+  for (const jid of [...chats.keys()].filter(isLidJid)) {
+    const incomingAt = latestMessageAt(jid, false) || chats.get(jid)?.lastAt || 0;
+    if (!incomingAt) continue;
+    const candidate = [...chats.keys()]
+      .filter((x) => x !== jid && isPhoneJid(x))
+      .map((x) => ({ jid: x, outAt: latestMessageAt(x, true) }))
+      .filter((x) => x.outAt > 0 && incomingAt >= x.outAt && incomingAt - x.outAt <= LID_REPLY_LINK_WINDOW_MS)
+      .sort((a, b) => b.outAt - a.outAt)[0];
+    if (candidate) mergeJidData(jid, candidate.jid);
+  }
 }
 
 function unwrapMessage(m?: proto.IMessage | null): proto.IMessage | null {
@@ -221,37 +336,48 @@ function getQuotedMessage(rawMessage: any, jid: string): any | null {
   };
 }
 
-function aliasOf(jid: string): string | null { return Object.entries(aliases).find(([, v]) => v === jid)?.[0] ?? null; }
-function contactName(jid: string): string | null {
-  const c = contacts.get(jid);
+function aliasOf(jidRaw: string): string | null {
+  const jid = rootJid(jidRaw);
+  return Object.entries(aliases).find(([, v]) => rootJid(v) === jid)?.[0] ?? null;
+}
+function contactName(jidRaw: string): string | null {
+  const jid = rootJid(jidRaw);
+  const c = contacts.get(jid) ?? contacts.get(jidRaw);
   return c?.name ?? c?.notify ?? c?.verifiedName ?? null;
 }
-function nameOf(jid: string): string { const a = aliasOf(jid); return a ? `@${a}` : contactName(jid) ?? chats.get(jid)?.name ?? jid; }
+function nameOf(jidRaw: string): string {
+  const jid = rootJid(jidRaw);
+  const a = aliasOf(jid);
+  return a ? `@${a}` : contactName(jid) ?? chats.get(jid)?.name ?? jid;
+}
 
 function upsertContact(jid: string, name?: string | null, notify?: string | null, verifiedName?: string | null): void {
-  const id = jidNormalizedUser(jid);
+  const id = rootJid(jidNormalizedUser(jid) ?? jid);
   if (!id || id === 'status@broadcast') return;
   const old = contacts.get(id);
   contacts.set(id, { jid: id, name: name || notify || verifiedName || old?.name || id, notify: notify ?? old?.notify, verifiedName: verifiedName ?? old?.verifiedName, updatedAt: Date.now() });
 }
 
-function upsertChat(jid: string, name: string, msg: string, fromMe: boolean, at: number): void {
+function upsertChat(jidRaw: string, name: string, msg: string, fromMe: boolean, at: number): void {
+  const jid = rootJid(jidRaw);
   const old = chats.get(jid);
   if (!fromMe) upsertContact(jid, name);
-  const safeName = fromMe ? (contactName(jid) ?? old?.name ?? jid) : name;
+  const safeName = fromMe ? (contactName(jid) ?? old?.name ?? jid) : (contactName(jid) ?? old?.name ?? name);
   chats.set(jid, { jid, name: old?.name && old.name !== jid ? old.name : safeName, lastMessage: msg, lastAt: at, unread: fromMe || currentChat === jid ? 0 : (old?.unread ?? 0) + 1 });
 }
 
 function pushMsg(m: StoredMessage): void {
+  const jid = rootJid(m.jid);
   if (!m.text || m.text === '[unsupported message]') return;
-  const list = messages.get(m.jid) ?? [];
-  if (list.some((old) => isSameMessage(old, m))) return;
-  list.push(m);
-  messages.set(m.jid, list.slice(-MAX_MSG));
+  const fixed = { ...m, jid };
+  const list = messages.get(jid) ?? [];
+  if (list.some((old) => isSameMessage(old, fixed))) return;
+  list.push(fixed);
+  messages.set(jid, list.slice(-MAX_MSG));
 }
 
 function addMedia(item: Omit<MediaItem, 'id'>): MediaItem {
-  const full: MediaItem = { ...item, id: nextMediaId++ };
+  const full: MediaItem = { ...item, jid: rootJid(item.jid), id: nextMediaId++ };
   media.set(full.id, full);
   return full;
 }
@@ -337,6 +463,7 @@ function renderList(): void {
 function renderChat(): void {
   renderHeader();
   if (!currentChat) { mode = 'inbox'; renderList(); return; }
+  currentChat = rootJid(currentChat);
   const ch = chats.get(currentChat);
   if (ch) chats.set(currentChat, { ...ch, unread: 0 });
   console.log(chalk.cyan.bold(`Chat: ${nameOf(currentChat)}`));
@@ -370,9 +497,9 @@ function resolveName(raw: string): string | null {
 function resolveTarget(raw: string): string {
   const v = raw.trim();
   if (!v) throw new Error('Target kosong.');
-  if (v.startsWith('@')) { const jid = aliases[v.slice(1).toLowerCase()]; if (!jid) throw new Error(`Alias ${v} belum ada.`); return jid; }
-  const byIndex = resolveIndex(v); if (byIndex) return byIndex;
-  if (v.includes('@s.whatsapp.net') || v.includes('@g.us') || v.includes('@lid')) return jidNormalizedUser(v);
+  if (v.startsWith('@')) { const jid = aliases[v.slice(1).toLowerCase()]; if (!jid) throw new Error(`Alias ${v} belum ada.`); return rootJid(jid); }
+  const byIndex = resolveIndex(v); if (byIndex) return rootJid(byIndex);
+  if (v.includes('@s.whatsapp.net') || v.includes('@g.us') || v.includes('@lid')) return rootJid(jidNormalizedUser(v));
   return resolveName(v) ?? phoneToJid(v);
 }
 
@@ -396,7 +523,7 @@ ${chalk.cyan.bold('Slash command')}
   /clear | /logout | /exit
 `);
 }
-function printAliases(): void { Object.entries(aliases).forEach(([a, j]) => console.log(`${chalk.cyan(`@${a}`)} -> ${nameOf(j)} ${chalk.gray(j)}`)); }
+function printAliases(): void { Object.entries(aliases).forEach(([a, j]) => console.log(`${chalk.cyan(`@${a}`)} -> ${nameOf(j)} ${chalk.gray(rootJid(j))}`)); }
 
 function openPath(filePath: string): void {
   const resolved = path.resolve(filePath);
@@ -445,7 +572,8 @@ function openMedia(idRaw: string): void {
   console.log(chalk.green(`open media #${item.kind === 'view-once-image' ? `v${id}` : id}: ${item.filePath}`));
 }
 
-async function sendText(sock: ReturnType<typeof makeWASocket>, jid: string, text: string): Promise<void> {
+async function sendText(sock: ReturnType<typeof makeWASocket>, jidRaw: string, text: string): Promise<void> {
+  const jid = rootJid(jidRaw);
   const content: AnyMessageContent = { text };
   await sock.sendMessage(jid, content);
   const at = Date.now();
@@ -457,7 +585,7 @@ async function sendText(sock: ReturnType<typeof makeWASocket>, jid: string, text
 
 async function forwardViewOnceIfEnabled(sock: ReturnType<typeof makeWASocket>, item?: MediaItem): Promise<void> {
   if (!item || item.kind !== 'view-once-image') return;
-  const target = settings.viewOnceForwardJid;
+  const target = settings.viewOnceForwardJid ? rootJid(settings.viewOnceForwardJid) : undefined;
   if (!target) return;
   if (!fs.existsSync(item.filePath)) return;
 
@@ -474,7 +602,7 @@ async function forwardViewOnceIfEnabled(sock: ReturnType<typeof makeWASocket>, i
 }
 
 function viewOnceStatus(): void {
-  const target = settings.viewOnceForwardJid;
+  const target = settings.viewOnceForwardJid ? rootJid(settings.viewOnceForwardJid) : undefined;
   const count = [...media.values()].filter((x) => x.kind === 'view-once-image').length;
   if (target) {
     console.log(chalk.green(`Anti-viewonce aktif. Auto-forward target: ${nameOf(target)} ${chalk.gray(target)}. Tersimpan sesi ini: ${count}.`));
@@ -545,7 +673,7 @@ async function shortcut(sock: ReturnType<typeof makeWASocket>, line: string): Pr
   if (lower === 'b' || lower === 'back') { currentChat = null; return setMode('inbox'); }
   if (lower === 'n' || lower === 'next') { activeList = listForMode(); page = Math.min(page + 1, maxPage()); return render(); }
   if (lower === 'p' || lower === 'prev') { page = Math.max(0, page - 1); return render(); }
-  if ((/^[1-9]$|^10$/).test(line) && mode !== 'chat') { const jid = resolveIndex(line); if (!jid) throw new Error('Item tidak ada.'); currentChat = jid; mode = 'chat'; return render(); }
+  if ((/^[1-9]$|^10$/).test(line) && mode !== 'chat') { const jid = resolveIndex(line); if (!jid) throw new Error('Item tidak ada.'); currentChat = rootJid(jid); mode = 'chat'; return render(); }
   if (lower === 's' || lower.startsWith('s ')) return setMode('search', line.slice(1).trim());
   if (lower === 'c' || lower.startsWith('c ')) return setMode('contacts', line.slice(1).trim());
   if (lower.startsWith('r ')) { const [, idx, ...msg] = line.split(' '); const jid = resolveIndex(idx); if (!jid || !msg.join(' ')) throw new Error('Format: r <no> <pesan>'); return sendText(sock, jid, msg.join(' ')); }
@@ -589,12 +717,14 @@ async function connect(): Promise<void> {
   sock.ev.on('messages.upsert', async ({ messages: incoming }) => {
     let changed = false;
     for (const m of incoming) {
-      const jid = m.key.remoteJid;
-      if (!jid || jid === 'status@broadcast') continue;
+      const rawJid = m.key.remoteJid;
+      if (!rawJid || rawJid === 'status@broadcast') continue;
       const fromMe = Boolean(m.key.fromMe);
       const at = Number(m.messageTimestamp ?? Math.floor(Date.now() / 1000)) * 1000;
-      const senderName = fromMe ? 'kamu' : m.pushName || nameOf(jid);
-      const chatName = fromMe ? nameOf(jid) : m.pushName || nameOf(jid);
+      const senderName = fromMe ? 'kamu' : m.pushName || nameOf(rawJid);
+      const jid = fromMe ? rootJid(rawJid) : findLikelyCanonicalForIncoming(rawJid, m.pushName, at);
+      if (!isOneToOneJid(jid) && jid.includes('@newsletter')) continue;
+      const chatName = fromMe ? nameOf(jid) : (contactName(jid) ?? m.pushName ?? nameOf(jid));
       const mediaResult = await saveIncomingImage(sock, m as any, jid, fromMe, senderName, at);
       if (mediaResult?.item?.kind === 'view-once-image') await forwardViewOnceIfEnabled(sock, mediaResult.item);
       const text = mediaResult?.text ?? textOf(m.message);
