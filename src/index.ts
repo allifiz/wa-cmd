@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import './quiet-logs.js';
-import makeWASocket, { DisconnectReason, fetchLatestBaileysVersion, jidNormalizedUser, type AnyMessageContent, type proto, useMultiFileAuthState } from '@whiskeysockets/baileys';
+import makeWASocket, { DisconnectReason, downloadMediaMessage, fetchLatestBaileysVersion, jidNormalizedUser, type AnyMessageContent, type proto, useMultiFileAuthState } from '@whiskeysockets/baileys';
 import chalk from 'chalk';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
@@ -13,17 +14,22 @@ type ChatItem = { jid: string; name: string; lastMessage: string; lastAt: number
 type StoredMessage = { jid: string; fromMe: boolean; senderName: string; text: string; at: number };
 type ContactItem = { jid: string; name: string; notify?: string; verifiedName?: string; updatedAt: number };
 type AliasStore = Record<string, string>;
+type MediaKind = 'image' | 'view-once-image';
+type MediaItem = { id: number; jid: string; kind: MediaKind; filePath: string; caption?: string; fromMe: boolean; senderName: string; at: number };
 type ListItem = { jid: string; name: string; subtitle: string; source: 'chat' | 'contact' };
 type Mode = 'inbox' | 'chat' | 'contacts' | 'search';
 
 const ROOT = process.cwd();
 const AUTH = path.join(ROOT, 'auth');
 const DATA = path.join(ROOT, 'data');
+const IMAGE_DIR = path.join(DATA, 'media', 'images');
+const VIEW_ONCE_DIR = path.join(IMAGE_DIR, 'view-once');
 const FILES = {
   aliases: path.join(DATA, 'aliases.json'),
   contacts: path.join(DATA, 'contacts.json'),
   chats: path.join(DATA, 'chats.json'),
   messages: path.join(DATA, 'messages.json'),
+  media: path.join(DATA, 'media.json'),
 };
 const PAGE_SIZE = 10;
 const MAX_MSG = 80;
@@ -32,7 +38,9 @@ const DUPLICATE_WINDOW_MS = 3000;
 const chats = new Map<string, ChatItem>();
 const contacts = new Map<string, ContactItem>();
 const messages = new Map<string, StoredMessage[]>();
+const media = new Map<number, MediaItem>();
 let aliases: AliasStore = {};
+let nextMediaId = 1;
 let mode: Mode = 'inbox';
 let page = 0;
 let filter = '';
@@ -44,8 +52,17 @@ let lastRender = 0;
 const logger = P({ level: 'silent' });
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
-function ensureData(): void {
-  if (!fs.existsSync(DATA)) fs.mkdirSync(DATA, { recursive: true });
+function ensureDir(dir: string): void { if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true }); }
+function ensureData(): void { ensureDir(DATA); }
+function ensureImages(): void { ensureDir(IMAGE_DIR); ensureDir(VIEW_ONCE_DIR); }
+
+function cleanupViewOnceFiles(): void {
+  fs.rmSync(VIEW_ONCE_DIR, { recursive: true, force: true });
+  ensureDir(VIEW_ONCE_DIR);
+  for (const [id, item] of media.entries()) {
+    if (item.kind === 'view-once-image') media.delete(id);
+  }
+  writeJson(FILES.media, Object.fromEntries([...media.entries()].map(([id, item]) => [String(id), item])));
 }
 
 function readJson<T>(file: string, fallback: T): T {
@@ -78,6 +95,8 @@ function loadData(): void {
   for (const c of Object.values(readJson<Record<string, ContactItem>>(FILES.contacts, {}))) if (c.jid) contacts.set(c.jid, c);
   for (const c of Object.values(readJson<Record<string, ChatItem>>(FILES.chats, {}))) if (c.jid) chats.set(c.jid, c);
   for (const [jid, list] of Object.entries(readJson<Record<string, StoredMessage[]>>(FILES.messages, {}))) messages.set(jid, dedupeMessageList(list));
+  for (const item of Object.values(readJson<Record<string, MediaItem>>(FILES.media, {}))) if (item.id && item.filePath) media.set(item.id, item);
+  nextMediaId = Math.max(0, ...media.keys()) + 1;
 }
 
 function saveData(): void {
@@ -85,10 +104,19 @@ function saveData(): void {
   writeJson(FILES.contacts, Object.fromEntries(contacts));
   writeJson(FILES.chats, Object.fromEntries(chats));
   writeJson(FILES.messages, Object.fromEntries([...messages.entries()].map(([jid, list]) => [jid, dedupeMessageList(list)])));
+  writeJson(FILES.media, Object.fromEntries([...media.entries()].map(([id, item]) => [String(id), item])));
+}
+
+function exitApp(code = 0): never {
+  saveData();
+  cleanupViewOnceFiles();
+  console.log(chalk.gray('\nBye.'));
+  process.exit(code);
 }
 
 function norm(s: string): string { return s.trim().toLowerCase(); }
 function short(s: string, n = 50): string { return s.length <= n ? s : `${s.slice(0, n - 1)}…`; }
+function safeFilePart(s: string): string { return s.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 48); }
 function time(ts: number): string { return new Intl.DateTimeFormat('id-ID', { hour: '2-digit', minute: '2-digit' }).format(new Date(ts)); }
 function phoneToJid(s: string): string {
   const n = s.replace(/[^0-9]/g, '');
@@ -106,24 +134,38 @@ function unwrapMessage(m?: proto.IMessage | null): proto.IMessage | null {
     ?? m;
 }
 
+function isViewOnce(raw?: proto.IMessage | null): boolean {
+  if (!raw) return false;
+  const anyMsg = raw as any;
+  return Boolean(anyMsg.viewOnceMessage || anyMsg.viewOnceMessageV2 || anyMsg.imageMessage?.viewOnce || anyMsg.videoMessage?.viewOnce);
+}
+
 function textOf(raw?: proto.IMessage | null): string {
+  const once = isViewOnce(raw);
   const m = unwrapMessage(raw);
   if (!m) return '';
   const anyMsg = m as any;
   if (m.conversation) return m.conversation;
   if (m.extendedTextMessage?.text) return m.extendedTextMessage.text;
-  if (m.imageMessage?.caption) return `[image] ${m.imageMessage.caption}`;
-  if (m.videoMessage?.caption) return `[video] ${m.videoMessage.caption}`;
+  if (m.imageMessage?.caption) return `[${once ? 'view-once image' : 'image'}] ${m.imageMessage.caption}`;
+  if (m.videoMessage?.caption) return `[${once ? 'view-once video' : 'video'}] ${m.videoMessage.caption}`;
   if (m.documentMessage?.caption) return `[document] ${m.documentMessage.caption}`;
   if (m.buttonsResponseMessage?.selectedDisplayText) return `[button] ${m.buttonsResponseMessage.selectedDisplayText}`;
   if (m.listResponseMessage?.title) return `[list] ${m.listResponseMessage.title}`;
   if (anyMsg.templateButtonReplyMessage?.selectedDisplayText) return `[template] ${anyMsg.templateButtonReplyMessage.selectedDisplayText}`;
-  if (m.imageMessage) return '[image]';
-  if (m.videoMessage) return '[video]';
+  if (m.imageMessage) return once ? '[view-once image]' : '[image]';
+  if (m.videoMessage) return once ? '[view-once video]' : '[video]';
   if (m.audioMessage) return '[audio]';
   if (m.stickerMessage) return '[sticker]';
   if (m.documentMessage) return '[document]';
   return '';
+}
+
+function getImageMessage(raw?: proto.IMessage | null): { caption?: string; once: boolean } | null {
+  const once = isViewOnce(raw);
+  const m = unwrapMessage(raw);
+  if (!m?.imageMessage) return null;
+  return { caption: m.imageMessage.caption ?? undefined, once };
 }
 
 function aliasOf(jid: string): string | null { return Object.entries(aliases).find(([, v]) => v === jid)?.[0] ?? null; }
@@ -153,6 +195,33 @@ function pushMsg(m: StoredMessage): void {
   if (list.some((old) => isSameMessage(old, m))) return;
   list.push(m);
   messages.set(m.jid, list.slice(-MAX_MSG));
+}
+
+function addMedia(item: Omit<MediaItem, 'id'>): MediaItem {
+  const full: MediaItem = { ...item, id: nextMediaId++ };
+  media.set(full.id, full);
+  return full;
+}
+
+async function saveIncomingImage(sock: ReturnType<typeof makeWASocket>, rawMessage: any, jid: string, fromMe: boolean, senderName: string, at: number): Promise<string | null> {
+  const info = getImageMessage(rawMessage.message);
+  if (!info) return null;
+  try {
+    ensureImages();
+    const buffer = await downloadMediaMessage(rawMessage, 'buffer', {}, { logger, reuploadRequest: sock.updateMediaMessage } as any) as Buffer;
+    const kind: MediaKind = info.once ? 'view-once-image' : 'image';
+    const id = nextMediaId;
+    const dir = info.once ? VIEW_ONCE_DIR : IMAGE_DIR;
+    const fileName = `${info.once ? 'view-once' : 'image'}-${String(id).padStart(4, '0')}-${safeFilePart(jid)}-${at}.jpg`;
+    const filePath = path.join(dir, fileName);
+    fs.writeFileSync(filePath, buffer);
+    const item = addMedia({ jid, kind, filePath, caption: info.caption, fromMe, senderName, at });
+    const label = info.once ? `view-once image #v${item.id}` : `image #${item.id}`;
+    const caption = info.caption ? ` ${info.caption}` : '';
+    return `[${label}]${caption}`;
+  } catch {
+    return info.once ? '[view-once image: gagal download]' : '[image: gagal download]';
+  }
 }
 
 function sortedChats(): ChatItem[] { return [...chats.values()].filter((c) => c.lastMessage && c.lastMessage !== '[unsupported message]').sort((a, b) => b.lastAt - a.lastAt); }
@@ -190,7 +259,7 @@ function pageItems(): ListItem[] { return activeList.slice(page * PAGE_SIZE, pag
 function renderHeader(): void {
   console.clear();
   console.log(chalk.cyan.bold('WA CMD'));
-  console.log(chalk.gray('1-10 open | n/p page | s <nama> search | c <nama> contacts | r <no> <pesan> | b back | /help'));
+  console.log(chalk.gray('1-10 open | n/p page | s <nama> search | c <nama> contacts | r <no> <pesan> | v <media-id> | b back | /help'));
   console.log('');
 }
 function renderList(): void {
@@ -211,7 +280,7 @@ function renderChat(): void {
   const ch = chats.get(currentChat);
   if (ch) chats.set(currentChat, { ...ch, unread: 0 });
   console.log(chalk.cyan.bold(`Chat: ${nameOf(currentChat)}`));
-  console.log(chalk.gray('Ketik pesan langsung. b/back kembali.'));
+  console.log(chalk.gray('Ketik pesan langsung. b/back kembali. v <media-id> buka foto.'));
   console.log('');
   const list = dedupeMessageList(messages.get(currentChat) ?? []).slice(-30);
   if (!list.length) console.log(chalk.gray('Belum ada pesan lokal untuk chat ini.'));
@@ -256,15 +325,27 @@ ${chalk.cyan.bold('Shortcut')}
   s <kata>              search chat + kontak
   c <kata>              filter contacts
   r <no> <pesan>        quick reply
+  v <media-id>          buka foto. Contoh: v 7 atau v v12
   @alias <pesan>        quick send
 
 ${chalk.cyan.bold('Slash command')}
   /chats | /contacts [nama] | /search <kata> | /open <target>
   /send <target> <pesan> | /alias <target> <alias> | /aliases
-  /clear | /logout | /exit
+  /view <media-id> | /clear | /logout | /exit
 `);
 }
 function printAliases(): void { Object.entries(aliases).forEach(([a, j]) => console.log(`${chalk.cyan(`@${a}`)} -> ${nameOf(j)} ${chalk.gray(j)}`)); }
+
+function openMedia(idRaw: string): void {
+  const cleaned = idRaw.trim().replace(/^v/i, '');
+  const id = Number(cleaned);
+  if (!Number.isInteger(id)) throw new Error('Format: v <media-id>, contoh v 7 atau v v12');
+  const item = media.get(id);
+  if (!item) throw new Error(`Media #${id} tidak ketemu.`);
+  if (!fs.existsSync(item.filePath)) throw new Error(`File media #${id} tidak ada di disk: ${item.filePath}`);
+  spawn('cmd', ['/c', 'start', '', path.resolve(item.filePath)], { detached: true, stdio: 'ignore' }).unref();
+  console.log(chalk.green(`open media #${item.kind === 'view-once-image' ? `v${id}` : id}: ${item.filePath}`));
+}
 
 async function sendText(sock: ReturnType<typeof makeWASocket>, jid: string, text: string): Promise<void> {
   const content: AnyMessageContent = { text };
@@ -287,15 +368,16 @@ async function slash(sock: ReturnType<typeof makeWASocket>, line: string): Promi
   if (cmd === '/send') { const target = args.shift(); const text = args.join(' '); if (!target || !text) throw new Error('Format: /send <target> <pesan>'); return sendText(sock, resolveTarget(target), text); }
   if (cmd === '/alias') { const target = args.shift(); const alias = args.shift()?.toLowerCase(); if (!target || !alias) throw new Error('Format: /alias <target> <alias>'); aliases[alias] = resolveTarget(target); saveData(); console.log(chalk.green(`Alias @${alias} disimpan.`)); return; }
   if (cmd === '/aliases') return printAliases();
+  if (cmd === '/view') return openMedia(args[0] ?? '');
   if (cmd === '/clear') return render();
-  if (cmd === '/logout') { fs.rmSync(AUTH, { recursive: true, force: true }); console.log(chalk.yellow('Session lokal dihapus. Jalankan ulang untuk scan QR.')); process.exit(0); }
-  if (cmd === '/exit' || cmd === '/quit') process.exit(0);
+  if (cmd === '/logout') { cleanupViewOnceFiles(); fs.rmSync(AUTH, { recursive: true, force: true }); console.log(chalk.yellow('Session lokal dihapus. Jalankan ulang untuk scan QR.')); process.exit(0); }
+  if (cmd === '/exit' || cmd === '/quit') exitApp(0);
   console.log(chalk.yellow('Command tidak dikenal. Ketik /help.'));
 }
 
 async function shortcut(sock: ReturnType<typeof makeWASocket>, line: string): Promise<void> {
   const lower = norm(line);
-  if (lower === 'q' || lower === 'quit' || lower === 'exit') process.exit(0);
+  if (lower === 'q' || lower === 'quit' || lower === 'exit') exitApp(0);
   if (lower === 'b' || lower === 'back') { currentChat = null; return setMode('inbox'); }
   if (lower === 'n' || lower === 'next') { activeList = listForMode(); page = Math.min(page + 1, maxPage()); return render(); }
   if (lower === 'p' || lower === 'prev') { page = Math.max(0, page - 1); return render(); }
@@ -303,6 +385,7 @@ async function shortcut(sock: ReturnType<typeof makeWASocket>, line: string): Pr
   if (lower === 's' || lower.startsWith('s ')) return setMode('search', line.slice(1).trim());
   if (lower === 'c' || lower.startsWith('c ')) return setMode('contacts', line.slice(1).trim());
   if (lower.startsWith('r ')) { const [, idx, ...msg] = line.split(' '); const jid = resolveIndex(idx); if (!jid || !msg.join(' ')) throw new Error('Format: r <no> <pesan>'); return sendText(sock, jid, msg.join(' ')); }
+  if (lower.startsWith('v ')) return openMedia(line.slice(1).trim());
   if (line.startsWith('@')) { const [target, ...msg] = line.split(' '); if (!msg.join(' ')) throw new Error('Format: @alias <pesan>'); return sendText(sock, resolveTarget(target), msg.join(' ')); }
   if (mode === 'chat' && currentChat) return sendText(sock, currentChat, line);
   console.log(chalk.yellow('Tidak paham. Ketik /help.'));
@@ -320,10 +403,11 @@ async function promptLoop(sock: ReturnType<typeof makeWASocket>): Promise<void> 
 
 async function connect(): Promise<void> {
   ensureData();
-  if (!fs.existsSync(AUTH)) fs.mkdirSync(AUTH, { recursive: true });
+  ensureImages();
+  ensureDir(AUTH);
   const { state, saveCreds } = await useMultiFileAuthState(AUTH);
   const { version } = await fetchLatestBaileysVersion();
-  const sock = makeWASocket({ auth: state, version, logger, printQRInTerminal: false, browser: ['WA CMD', 'Chrome', '0.3.3'], markOnlineOnConnect: false, syncFullHistory: false });
+  const sock = makeWASocket({ auth: state, version, logger, printQRInTerminal: false, browser: ['WA CMD', 'Chrome', '0.4.0'], markOnlineOnConnect: false, syncFullHistory: false });
 
   sock.ev.on('creds.update', saveCreds);
   sock.ev.on('contacts.upsert', (items: unknown[]) => { for (const raw of items) { const x = raw as { id?: string; jid?: string; name?: string; notify?: string; verifiedName?: string }; const jid = x.id ?? x.jid; if (jid) upsertContact(jid, x.name, x.notify, x.verifiedName); } saveData(); });
@@ -333,20 +417,21 @@ async function connect(): Promise<void> {
     if (connection === 'close') {
       const code = (lastDisconnect?.error as { output?: { statusCode?: number } })?.output?.statusCode;
       if (code !== DisconnectReason.loggedOut && !reconnecting) { reconnecting = true; console.log(chalk.yellow('Koneksi putus, reconnect...')); await connect(); }
-      else if (code === DisconnectReason.loggedOut) { console.log(chalk.red('Logged out. Hapus auth lalu scan QR ulang.')); process.exit(1); }
+      else if (code === DisconnectReason.loggedOut) { cleanupViewOnceFiles(); console.log(chalk.red('Logged out. Hapus auth lalu scan QR ulang.')); process.exit(1); }
     }
   });
-  sock.ev.on('messages.upsert', ({ messages: incoming }) => {
+  sock.ev.on('messages.upsert', async ({ messages: incoming }) => {
     let changed = false;
     for (const m of incoming) {
       const jid = m.key.remoteJid;
       if (!jid || jid === 'status@broadcast') continue;
-      const text = textOf(m.message);
-      if (!text) continue;
       const fromMe = Boolean(m.key.fromMe);
       const at = Number(m.messageTimestamp ?? Math.floor(Date.now() / 1000)) * 1000;
       const senderName = fromMe ? 'kamu' : m.pushName || nameOf(jid);
       const chatName = fromMe ? nameOf(jid) : m.pushName || nameOf(jid);
+      const mediaText = await saveIncomingImage(sock, m as any, jid, fromMe, senderName, at);
+      const text = mediaText ?? textOf(m.message);
+      if (!text) continue;
       upsertChat(jid, chatName, text, fromMe, at);
       pushMsg({ jid, fromMe, senderName, text, at });
       changed = true;
@@ -358,5 +443,5 @@ async function connect(): Promise<void> {
 }
 
 loadData();
-process.on('SIGINT', () => { saveData(); console.log(chalk.gray('\nBye.')); process.exit(0); });
-connect().catch((e) => { console.error(chalk.red(`Fatal: ${e instanceof Error ? e.message : String(e)}`)); process.exit(1); });
+process.on('SIGINT', () => exitApp(0));
+connect().catch((e) => { cleanupViewOnceFiles(); console.error(chalk.red(`Fatal: ${e instanceof Error ? e.message : String(e)}`)); process.exit(1); });
