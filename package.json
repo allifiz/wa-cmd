@@ -13,6 +13,7 @@
     "build": "npm run patch:runtime && tsc",
     "start": "node dist/index.js",
     "import-vcf": "tsx src/import-vcf.ts",
+    "notify:test": "node scripts/test-notify.mjs",
     "cache:list": "node scripts/cache-admin.mjs list",
     "cache:merge": "node scripts/cache-admin.mjs merge",
     "cache:remove": "node scripts/cache-admin.mjs remove",
