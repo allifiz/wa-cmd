@@ -1,6 +1,6 @@
 {
   "name": "wa-cmd",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Lightweight WhatsApp terminal client powered by Baileys.",
   "type": "module",
   "main": "dist/index.js",
@@ -11,6 +11,7 @@
     "dev": "tsx src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
+    "import-vcf": "tsx src/import-vcf.ts",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [
