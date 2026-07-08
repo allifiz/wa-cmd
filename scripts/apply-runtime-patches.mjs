@@ -23,6 +23,13 @@ patchOnce('node-notifier import', (s) => {
   );
 });
 
+patchOnce('windows toaster notifier', (s) => {
+  return s.replace(
+    "const notifier = require('node-notifier');",
+    "const notifierPkg = require('node-notifier');\nconst WindowsToaster = notifierPkg.WindowsToaster;\nconst notifier = process.platform === 'win32' && WindowsToaster ? new WindowsToaster({ withFallback: true }) : notifierPkg;"
+  );
+});
+
 patchOnce('native notification', (s) => {
   if (s.includes('notifier.notify({')) return s;
   const oldBlock = /function psQuote\(s: string\): string \{ return s\.replace\(\/'\/g, "''"\); \}\nfunction terminalBell\(\): void \{ try \{ process\.stdout\.write\('\\x07'\); \} catch \{ \/\* ignore \*\/ \} \}\nfunction windowsBalloon\(title: string, message: string\): void \{[\s\S]*?\n\}\nfunction notifyNewMessage\(sender: string, message: string\): void \{\n  const now = Date\.now\(\);\n  if \(now - lastNotificationAt < NOTIFICATION_COOLDOWN_MS\) return;\n  lastNotificationAt = now;\n  terminalBell\(\);\n  windowsBalloon\('WA CMD', `\$\{sender\}: \$\{message\}`\);\n\}/;
