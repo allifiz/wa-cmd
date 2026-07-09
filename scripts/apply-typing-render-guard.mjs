@@ -33,14 +33,21 @@ function insertReadlineCoreImport() {
   changed = true;
 }
 
-insertReadlineCoreImport();
+function insertPromptRenderState() {
+  if (src.includes('let promptActive = false;') && src.includes('let renderPending = false;')) return;
+  const re = /let lastRender = 0;\r?\n/;
+  const match = src.match(re);
+  if (!match?.index && match?.index !== 0) {
+    console.error('Target patch tidak ketemu: add prompt render state');
+    process.exit(1);
+  }
+  const insertAt = match.index + match[0].length;
+  src = `${src.slice(0, insertAt)}let promptActive = false;\nlet renderPending = false;\n${src.slice(insertAt)}`;
+  changed = true;
+}
 
-patch(
-  'add prompt render state',
-  "let lastRender = 0;\nlet lastNotificationAt = 0;",
-  "let lastRender = 0;\nlet promptActive = false;\nlet renderPending = false;\nlet lastNotificationAt = 0;",
-  'let promptActive = false;\nlet renderPending = false;'
-);
+insertReadlineCoreImport();
+insertPromptRenderState();
 
 const liveRender = "type PromptState = { line: string; cursor: number };\nfunction promptLabel(): string { return mode === 'chat' && currentChat ? `${nameOf(currentChat)}${pendingQuote ? ' ↪' : ''}> ` : 'wa-cmd> '; }\nfunction promptState(): PromptState { const state = rl as unknown as { line?: string; cursor?: number }; const line = state.line ?? ''; return { line, cursor: state.cursor ?? line.length }; }\nfunction promptHasInput(): boolean { return Boolean(promptState().line.length); }\nfunction restorePromptInput(state?: PromptState): void { const label = promptLabel(); process.stdout.write(chalk.green(label)); if (!state) return; process.stdout.write(state.line); readlineCore.cursorTo(process.stdout, label.length + state.cursor); }\nfunction render(): void { const state = promptActive && promptHasInput() ? promptState() : undefined; renderPending = false; lastRender = Date.now(); mode === 'chat' ? renderChat() : renderList(); if (promptActive) restorePromptInput(state); }\nfunction flushPendingRender(): void { if (!renderPending) return; renderPending = false; render(); }";
 
