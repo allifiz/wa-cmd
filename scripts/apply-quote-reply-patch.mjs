@@ -32,14 +32,13 @@ patch('active quote message list', (s) => {
 });
 
 patch('quote helpers', (s) => {
-  if (s.includes('function quoteInfoFromRaw(')) return s;
   const marker = '\nasync function sendText(sock: ReturnType<typeof makeWASocket>, jidRaw: string, text: string): Promise<void> {';
   const idx = s.indexOf(marker);
   if (idx === -1) return s;
   const block = `
-function quoteInfoFromRaw(raw: any, fallbackJid: string): any | null {
+function quoteInfoFromRaw(raw: any, fallbackJid: string, fallbackText?: string): any | null {
   const key = raw?.key;
-  const message = raw?.message;
+  const message = raw?.message ?? (fallbackText ? { conversation: fallbackText } : null);
   if (!key?.id || !message) return null;
   return {
     key: {
@@ -76,12 +75,20 @@ async function sendQuotedText(sock: ReturnType<typeof makeWASocket>, jidRaw: str
   const sent = await sock.sendMessage(jid, { text: clean }, { quoted: quoted.quote } as any);
   const at = Date.now();
   upsertChat(jid, nameOf(jid), clean, true, at);
-  pushMsg({ jid, fromMe: true, senderName: 'kamu', text: clean, at, quote: quoteInfoFromRaw(sent as any, jid) ?? undefined });
+  pushMsg({ jid, fromMe: true, senderName: 'kamu', text: clean, at, quote: quoteInfoFromRaw(sent as any, jid, clean) ?? undefined });
   markChatRepliedForCensor(jid);
   saveData();
   console.log(chalk.green('quoted reply sent ✓'));
 }
 `;
+
+  const existingStart = s.indexOf('function quoteInfoFromRaw(');
+  if (existingStart !== -1) {
+    const existingEnd = s.indexOf(marker, existingStart);
+    if (existingEnd === -1) return s;
+    return `${s.slice(0, existingStart)}${block}${s.slice(existingEnd)}`;
+  }
+
   return `${s.slice(0, idx)}${block}${s.slice(idx)}`;
 });
 
@@ -93,16 +100,25 @@ patch('store outgoing quote payload', (s) => {
   );
   out = out.replace(
     "pushMsg({ jid, fromMe: true, senderName: 'kamu', text, at });",
-    "pushMsg({ jid, fromMe: true, senderName: 'kamu', text, at, quote: quoteInfoFromRaw(sent as any, jid) ?? undefined });"
+    "pushMsg({ jid, fromMe: true, senderName: 'kamu', text, at, quote: quoteInfoFromRaw(sent as any, jid, text) ?? undefined });"
+  );
+  out = out.replace(
+    "pushMsg({ jid, fromMe: true, senderName: 'kamu', text, at, quote: quoteInfoFromRaw(sent as any, jid) ?? undefined });",
+    "pushMsg({ jid, fromMe: true, senderName: 'kamu', text, at, quote: quoteInfoFromRaw(sent as any, jid, text) ?? undefined });"
   );
   return out;
 });
 
 patch('store incoming quote payload', (s) => {
-  return s.replace(
+  let out = s.replace(
     'upsertChat(jid, chatName, text, fromMe, at);\n      pushMsg({ jid, fromMe, senderName, text, at });',
-    'upsertChat(jid, chatName, text, fromMe, at);\n      pushMsg({ jid, fromMe, senderName, text, at, quote: quoteInfoFromRaw(m as any, jid) ?? undefined });'
+    'upsertChat(jid, chatName, text, fromMe, at);\n      pushMsg({ jid, fromMe, senderName, text, at, quote: quoteInfoFromRaw(m as any, jid, text) ?? undefined });'
   );
+  out = out.replace(
+    'upsertChat(jid, chatName, text, fromMe, at);\n      pushMsg({ jid, fromMe, senderName, text, at, quote: quoteInfoFromRaw(m as any, jid) ?? undefined });',
+    'upsertChat(jid, chatName, text, fromMe, at);\n      pushMsg({ jid, fromMe, senderName, text, at, quote: quoteInfoFromRaw(m as any, jid, text) ?? undefined });'
+  );
+  return out;
 });
 
 patch('number visible chat messages', (s) => {
