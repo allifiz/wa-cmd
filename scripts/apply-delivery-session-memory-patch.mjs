@@ -30,15 +30,31 @@ if (src.includes('function deliveryJid(jidRaw: string): string')) {
   changed = true;
 }
 
-const afterJidOld = "const jid = fromMe ? rootJid(rawJid) : findLikelyCanonicalForIncoming(rawJid, m.pushName, m as any); const senderName =";
-const afterJidNew = "const jid = fromMe ? rootJid(rawJid) : findLikelyCanonicalForIncoming(rawJid, m.pushName, m as any); if (!fromMe) rememberDeliveryJid(jid, rawJid); const senderName =";
 if (!src.includes('rememberDeliveryJid(jid, rawJid)')) {
-  if (src.includes(afterJidOld)) {
-    src = src.replace(afterJidOld, afterJidNew);
+  const candidates = [
+    {
+      from: "const jid = fromMe ? rootJid(rawJid) : findLikelyCanonicalForIncoming(rawJid, m.pushName, m as any); const senderName =",
+      to: "const jid = fromMe ? rootJid(rawJid) : findLikelyCanonicalForIncoming(rawJid, m.pushName, m as any); if (!fromMe) rememberDeliveryJid(jid, rawJid); const senderName =",
+    },
+    {
+      from: "const jid = fromMe ? rootJid(rawJid) : findLikelyCanonicalForIncoming(rawJid, m.pushName ?? undefined, m as any); const senderName =",
+      to: "const jid = fromMe ? rootJid(rawJid) : findLikelyCanonicalForIncoming(rawJid, m.pushName ?? undefined, m as any); if (!fromMe) rememberDeliveryJid(jid, rawJid); const senderName =",
+    },
+    {
+      from: "const jid = fromMe ? rootJid(rawJid) : findLikelyCanonicalForIncoming(rawJid, m.pushName ?? undefined, m as any); const senderName = fromMe ? 'kamu' : safePushNameForJid(jid, m.pushName) ?? nameOf(jid);",
+      to: "const jid = fromMe ? rootJid(rawJid) : findLikelyCanonicalForIncoming(rawJid, m.pushName ?? undefined, m as any); if (!fromMe) rememberDeliveryJid(jid, rawJid); const senderName = fromMe ? 'kamu' : safePushNameForJid(jid, m.pushName) ?? nameOf(jid);",
+    },
+    {
+      from: "if (fromMe) rememberSelfPushName(m.pushName); const jid = fromMe ? rootJid(rawJid) : findLikelyCanonicalForIncoming(rawJid, m.pushName ?? undefined, m as any); const senderName = fromMe ? 'kamu' : safePushNameForJid(jid, m.pushName) ?? nameOf(jid);",
+      to: "if (fromMe) rememberSelfPushName(m.pushName); const jid = fromMe ? rootJid(rawJid) : findLikelyCanonicalForIncoming(rawJid, m.pushName ?? undefined, m as any); if (!fromMe) rememberDeliveryJid(jid, rawJid); const senderName = fromMe ? 'kamu' : safePushNameForJid(jid, m.pushName) ?? nameOf(jid);",
+    },
+  ];
+  const hit = candidates.find((x) => src.includes(x.from));
+  if (hit) {
+    src = src.replace(hit.from, hit.to);
     changed = true;
   } else {
-    console.error('Target patch tidak ketemu: remember inbound delivery JID');
-    process.exit(1);
+    console.warn('remember inbound delivery JID target tidak ketemu; lanjut tanpa stop.');
   }
 }
 
