@@ -18,6 +18,7 @@ WA CMD adalah client WhatsApp ringan berbasis terminal/CMD yang memakai Baileys.
 - Reply mode: pilih pesan dulu, lalu ketik balasan berikutnya.
 - Alias lokal seperti `@sayang`, `@bot`, atau `@kantor`.
 - Nama lokal dengan `/name` dan `/unname`.
+- Delete/hapus cache chat lokal langsung dari inbox.
 - Import kontak dari file `.vcf`.
 - Cache lokal untuk chat, kontak, pesan terakhir, alias, nama lokal, media, dan mapping JID.
 - Helper cache untuk merge chat duplikat, hapus cache lokal, merge berdasarkan index inbox, dan prefer LID delivery.
@@ -117,6 +118,7 @@ b / back              kembali ke inbox
 s <kata>              search chat + kontak
 c <kata>              filter kontak
 j <target>            pindah chat cepat
+d <target>            hapus cache chat lokal, contoh d 3
 r <no> <pesan>        quick reply ke item di halaman aktif
 v <media-id>          buka media tersimpan, contoh v1 atau v 7
 @alias <pesan>        kirim cepat ke alias
@@ -134,6 +136,14 @@ Quick reply dari inbox:
 ```txt
 r 2 siap, nanti aku cek
 ```
+
+Hapus cache chat lokal dari inbox:
+
+```txt
+d 3
+```
+
+Ini hanya menghapus cache lokal WA CMD. Chat asli di WhatsApp tidak ikut terhapus.
 
 Search:
 
@@ -194,6 +204,9 @@ Preview quote hanya muncul kalau pesan memang benar-benar reply/quote message la
 /quote <no> [pesan]           alias untuk /reply
 /link <from> <to>             link/merge chat duplikat
 /merge <from> <to>            alias untuk /link
+/delete <target>              hapus cache chat lokal
+/del <target>                 alias untuk /delete
+/rm <target>                  alias untuk /delete
 /alias [target] <alias>       simpan alias lokal
 /aliases                      lihat daftar alias
 /name [target] <nama>         simpan nama lokal
@@ -344,7 +357,16 @@ Folder `auth/` dan `data/` sudah masuk `.gitignore`.
 
 ## Mengelola cache chat
 
-Lihat daftar cache chat:
+Dari dalam WA CMD, hapus chat lokal dari inbox:
+
+```txt
+d 3
+/delete 3
+```
+
+Command ini hanya menghapus cache lokal WA CMD. Chat asli di WhatsApp tidak ikut terhapus.
+
+Lihat daftar cache chat dari terminal:
 
 ```bash
 npm run cache:list
@@ -383,7 +405,7 @@ npm run cache:prefer-lid -- list
 npm run cache:prefer-lid -- apply
 ```
 
-Hapus cache lokal chat tertentu:
+Hapus cache lokal chat tertentu dari terminal:
 
 ```bash
 npm run cache:remove -- <target>
@@ -451,6 +473,7 @@ npm run cache:merge-index   merge cache berdasarkan index list
 npm run cache:prefer-lid    balik mapping lama agar delivery prefer @lid
 npm run cache:remove        hapus cache chat lokal
 npm run fix:lid-delivery    patch source lokal untuk resolver LID terbaru
+npm run fix:delete-chat     patch source lokal untuk command delete chat
 npm run typecheck           cek TypeScript tanpa emit
 ```
 
@@ -550,13 +573,13 @@ npm run cache:merge-index -- merge <from-index> <to-index>
 
 ### Alias nyasar ke grup atau room salah
 
-Cek daftar cache:
+Dari dalam WA CMD, hapus cache lokal yang jelas salah:
 
-```bash
-npm run cache:merge-index -- list
+```txt
+d 3
 ```
 
-Kalau ada cache lokal yang jelas salah, hapus:
+Atau dari terminal:
 
 ```bash
 npm run cache:remove -- <jid-atau-index>
