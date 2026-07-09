@@ -15,6 +15,14 @@ function patch(label, fn) {
   }
 }
 
+patch('repair duplicate quote patch output', (s) => {
+  let out = s;
+  out = out.replace(/const sent =\s+const sent =\s+await sock\.sendMessage\(jid, content\);/g, 'const sent = await sock.sendMessage(jid, content);');
+  out = out.replace(/const sent =\s+const sent =\s+await sock\.sendMessage\(jid, \{ text: clean \}, \{ quoted: quoted\.quote \} as any\);/g, 'const sent = await sock.sendMessage(jid, { text: clean }, { quoted: quoted.quote } as any);');
+  out = out.replace(/(?:activeChatMessages = \[\];\n\s*){2,}activeList = listForMode\(\);/g, 'activeChatMessages = [];\n  activeList = listForMode();');
+  return out;
+});
+
 patch('stored message quote payload', (s) => {
   if (s.includes('quote?: any')) return s;
   return s.replace(
@@ -117,10 +125,13 @@ async function sendQuotedText(sock: ReturnType<typeof makeWASocket>, jidRaw: str
 
 patch('store outgoing quote payload', (s) => {
   let out = s;
+
+  // Only patch the bare send line. Do not match inside "const sent = await ...".
   out = out.replace(
-    'await sock.sendMessage(jid, content);',
-    'const sent = await sock.sendMessage(jid, content);'
+    /(^\s*)await sock\.sendMessage\(jid, content\);/m,
+    '$1const sent = await sock.sendMessage(jid, content);'
   );
+
   out = out.replace(
     "pushMsg({ jid, fromMe: true, senderName: 'kamu', text, at });",
     "pushMsg({ jid, fromMe: true, senderName: 'kamu', text, at, quote: quoteInfoFromRaw(sent as any, jid, text) ?? undefined });"
