@@ -6,45 +6,42 @@ const file = path.join(process.cwd(), 'src', 'index.ts');
 let src = fs.readFileSync(file, 'utf8');
 let changed = false;
 
-function replace(label, from, to, required = true) {
-  if (!src.includes(from)) {
-    if (required) {
-      console.error(`Target patch tidak ketemu: ${label}`);
-      process.exit(1);
-    }
-    return false;
+function addCreateRequireImport(): void {
+  if (src.includes("import { createRequire } from 'node:module';")) return;
+  const line = "import { createRequire } from 'node:module';\n";
+  const shebang = src.match(/^#![^\n]*\r?\n/);
+  if (shebang) {
+    src = `${shebang[0]}${line}${src.slice(shebang[0].length)}`;
+  } else {
+    src = `${line}${src}`;
   }
-  src = src.replace(from, to);
   changed = true;
-  return true;
 }
 
-function insertAfter(label, anchors, text) {
-  if (src.includes(text.trim())) return true;
-  for (const anchor of anchors) {
-    const pos = src.indexOf(anchor);
-    if (pos !== -1) {
-      const insertAt = pos + anchor.length;
+function insertAfterRegex(label: string, patterns: RegExp[], text: string): void {
+  if (src.includes(text.trim())) return;
+  for (const pattern of patterns) {
+    const match = src.match(pattern);
+    if (match?.index !== undefined) {
+      const insertAt = match.index + match[0].length;
       src = `${src.slice(0, insertAt)}${text}${src.slice(insertAt)}`;
       changed = true;
-      return true;
+      return;
     }
   }
   console.error(`Target patch tidak ketemu: ${label}`);
   process.exit(1);
 }
 
-if (!src.includes("import { createRequire } from 'node:module';")) {
-  insertAfter('add createRequire import', ["import fs from 'node:fs';\n", "import path from 'node:path';\n", "import * as readline from 'node:readline/promises';\n"], "import { createRequire } from 'node:module';\n");
-}
+addCreateRequireImport();
 
 const notifierSetup = "const require = createRequire(import.meta.url);\nconst notifierPkg = require('node-notifier');\nconst WindowsToaster = notifierPkg.WindowsToaster;\nconst notifier = process.platform === 'win32' && WindowsToaster ? new WindowsToaster({ withFallback: false }) : notifierPkg;\n";
 
 if (!src.includes('const require = createRequire(import.meta.url);')) {
-  insertAfter('add notifier setup', [
-    "const rl = readline.createInterface({ input: process.stdin, output: process.stdout });\n",
-    "let pendingQuote: StoredMessage | null = null;\n",
-    "let activeUnreadJids: string[] = [];\n",
+  insertAfterRegex('add notifier setup', [
+    /const rl = readline\.createInterface\(\{ input: process\.stdin, output: process\.stdout \}\);\r?\n/,
+    /let pendingQuote: StoredMessage \| null = null;\r?\n/,
+    /let activeUnreadJids: string\[\] = \[\];\r?\n/,
   ], notifierSetup);
 }
 
@@ -62,7 +59,7 @@ if (!src.includes('notifier.notify({ title, message: body')) {
 }
 
 if (src.includes("import { spawn } from 'node:child_process';") && !src.includes('spawn(')) {
-  src = src.replace("import { spawn } from 'node:child_process';\n", '');
+  src = src.replace(/import \{ spawn \} from 'node:child_process';\r?\n/, '');
   changed = true;
 }
 
