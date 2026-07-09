@@ -16,27 +16,43 @@ function patch(label, fn) {
 }
 
 patch('view-once chat marker helper', (s) => {
-  if (s.includes('function viewOnceChatMarker(')) return s;
   const marker = '\nasync function saveIncomingImage(sock: ReturnType<typeof makeWASocket>, rawMessage: any, jid: string, fromMe: boolean, senderName: string, at: number): Promise<MediaSaveResult | null> {';
   const idx = s.indexOf(marker);
   if (idx === -1) return s;
+
   const block = [
-    'function viewOnceChatMarker(raw?: proto.IMessage | null, senderName = \'user\', fromMe = false, item?: MediaItem): string | null {',
-    "  if (item?.kind !== 'view-once-image' && !isViewOnce(raw)) return null;",
+    'function viewOnceChatMarker(rawMessage?: unknown, senderName = \'user\', fromMe = false, item?: MediaItem, mediaText?: string): string | null {',
+    "  const raw = rawMessage as any;",
+    "  const message = raw?.message ?? raw;",
+    "  const mediaLooksViewOnce = Boolean(mediaText && /view-once/i.test(mediaText));",
+    "  if (item?.kind !== 'view-once-image' && !mediaLooksViewOnce && !isViewOnce(message)) return null;",
     "  const who = fromMe ? 'kamu' : (senderName.trim() || 'user');",
     "  const id = item?.kind === 'view-once-image' ? ' #v' + item.id : '';",
     "  return '[' + who + ' kirim view-once' + id + ']';",
     '}',
     '',
   ].join('\n');
+
+  const existingStart = s.indexOf('function viewOnceChatMarker(');
+  if (existingStart !== -1) {
+    const existingEnd = s.indexOf('\nasync function saveIncomingImage', existingStart);
+    if (existingEnd === -1) return s;
+    return `${s.slice(0, existingStart)}${block}${s.slice(existingEnd)}`;
+  }
+
   return `${s.slice(0, idx)}\n${block}${s.slice(idx)}`;
 });
 
 patch('prefer view-once marker in chat text', (s) => {
-  return s.replace(
+  let out = s.replace(
     'const text = mediaResult?.text ?? textOf(m.message);',
-    'const text = viewOnceChatMarker(m.message, senderName, fromMe, mediaResult?.item) ?? mediaResult?.text ?? textOf(m.message);'
+    'const text = viewOnceChatMarker(m as any, senderName, fromMe, mediaResult?.item, mediaResult?.text) ?? mediaResult?.text ?? textOf(m.message);'
   );
+  out = out.replace(
+    'const text = viewOnceChatMarker(m.message, senderName, fromMe, mediaResult?.item) ?? mediaResult?.text ?? textOf(m.message);',
+    'const text = viewOnceChatMarker(m as any, senderName, fromMe, mediaResult?.item, mediaResult?.text) ?? mediaResult?.text ?? textOf(m.message);'
+  );
+  return out;
 });
 
 if (changed) fs.writeFileSync(file, src);
