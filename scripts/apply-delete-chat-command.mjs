@@ -27,20 +27,22 @@ function replaceOptional(from, to) {
   }
 }
 
+const deleteLocalChatFn = "function deleteLocalChat(targetRaw: string): void { const target = targetRaw.trim() || '.'; const jid = resolveTarget(target); const label = nameOf(jid); chats.delete(jid); messages.delete(jid); for (const [id, item] of [...media.entries()]) if (item.jid === jid) media.delete(id); for (const [from, to] of [...jidLinks.entries()]) if (from === jid || to === jid) jidLinks.delete(from); for (const [alias, aliasJid] of Object.entries(aliases)) if (aliasJid === jid || rootJid(aliasJid) === jid) delete aliases[alias]; delete localNames[jid]; if (settings.viewOnceForwardJid === jid) delete settings.viewOnceForwardJid; if (currentChat === jid) { currentChat = null; mode = 'inbox'; pendingQuote = null; } saveData(); console.log(chalk.yellow(`Deleted local chat cache: ${label} (${jid})`)); render(); }";
+
 if (!src.includes('function deleteLocalChat(')) {
-  replace(
-    'insert deleteLocalChat after linkJids',
-    "function linkJids(fromRaw: string, toRaw: string): void { const from = resolveTarget(fromRaw); const to = resolveTarget(toRaw); if (!isLidJid(from) && !isLidJid(rootJid(from))) throw new Error('Sumber link harus @lid / room LID. Contoh: /link 1 2'); const canonical = mergeJidData(from, to); saveData(); console.log(chalk.green(`Linked ${from} -> ${nameOf(canonical)} (${canonical})`)); render(); }",
-    "function linkJids(fromRaw: string, toRaw: string): void { const from = resolveTarget(fromRaw); const to = resolveTarget(toRaw); if (!isLidJid(from) && !isLidJid(rootJid(from))) throw new Error('Sumber link harus @lid / room LID. Contoh: /link 1 2'); const canonical = mergeJidData(from, to); saveData(); console.log(chalk.green(`Linked ${from} -> ${nameOf(canonical)} (${canonical})`)); render(); }\nfunction deleteLocalChat(targetRaw: string): void { const target = targetRaw.trim() || '.'; const jid = resolveTarget(target); const label = nameOf(jid); chats.delete(jid); messages.delete(jid); for (const [id, item] of [...media.entries()]) if (item.jid === jid) media.delete(id); for (const [from, to] of [...jidLinks.entries()]) if (from === jid || to === jid) jidLinks.delete(from); for (const [alias, aliasJid] of Object.entries(aliases)) if (aliasJid === jid || rootJid(aliasJid) === jid) delete aliases[alias]; delete localNames[jid]; if (settings.viewOnceForwardJid === jid) delete settings.viewOnceForwardJid; if (currentChat === jid) { currentChat = null; mode = 'inbox'; pendingQuote = null; } saveData(); console.log(chalk.yellow(`Deleted local chat cache: ${label} (${jid})`)); render(); }"
-  );
+  const helpPos = src.indexOf('function help(): void');
+  if (helpPos === -1) {
+    console.error('Target patch tidak ketemu: insert deleteLocalChat before help');
+    process.exit(1);
+  }
+  src = `${src.slice(0, helpPos)}${deleteLocalChatFn}\n${src.slice(helpPos)}`;
+  changed = true;
 }
 
 if (!src.includes("cmd === '/delete'")) {
-  replace(
-    'slash delete command',
-    "if (cmd === '/link' || cmd === '/merge') { const from = args.shift(); const to = args.join(' '); if (!from || !to) throw new Error('Format: /link <lid-target> <real-target>. Contoh: /link 1 2'); return linkJids(from, to); } if (cmd === '/close' || cmd === '/back')",
-    "if (cmd === '/link' || cmd === '/merge') { const from = args.shift(); const to = args.join(' '); if (!from || !to) throw new Error('Format: /link <lid-target> <real-target>. Contoh: /link 1 2'); return linkJids(from, to); } if (cmd === '/delete' || cmd === '/del' || cmd === '/remove' || cmd === '/rm') { const target = args.join(' '); if (!target && !currentChat) throw new Error('Format: /delete <target>. Contoh: /delete 3'); return deleteLocalChat(target || '.'); } if (cmd === '/close' || cmd === '/back')"
-  );
+  const old = "return linkJids(from, to); } if (cmd === '/close' || cmd === '/back')";
+  const replacement = "return linkJids(from, to); } if (cmd === '/delete' || cmd === '/del' || cmd === '/remove' || cmd === '/rm') { const target = args.join(' '); if (!target && !currentChat) throw new Error('Format: /delete <target>. Contoh: /delete 3'); return deleteLocalChat(target || '.'); } if (cmd === '/close' || cmd === '/back')";
+  replace('slash delete command', old, replacement);
 }
 
 if (!src.includes("lower.startsWith('d ')")) {
