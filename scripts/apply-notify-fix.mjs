@@ -6,7 +6,7 @@ const file = path.join(process.cwd(), 'src', 'index.ts');
 let src = fs.readFileSync(file, 'utf8');
 let changed = false;
 
-function addCreateRequireImport(): void {
+function addCreateRequireImport() {
   if (src.includes("import { createRequire } from 'node:module';")) return;
   const line = "import { createRequire } from 'node:module';\n";
   const shebang = src.match(/^#![^\n]*\r?\n/);
@@ -18,7 +18,7 @@ function addCreateRequireImport(): void {
   changed = true;
 }
 
-function insertAfterRegex(label: string, patterns: RegExp[], text: string): void {
+function insertAfterRegex(label, patterns, text) {
   if (src.includes(text.trim())) return;
   for (const pattern of patterns) {
     const match = src.match(pattern);
