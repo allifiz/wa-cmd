@@ -60,22 +60,31 @@ function notifyNewMessage(sender: string, message: string): void {
 });
 
 patchOnce('message censor types and constants', (s) => {
-  let out = s.replace(
-    'type StoredMessage = { jid: string; fromMe: boolean; senderName: string; text: string; at: number };',
-    'type StoredMessage = { jid: string; fromMe: boolean; senderName: string; text: string; at: number; seenAt?: number; censoredAt?: number };'
-  );
-  out = out.replace(
-    'type SettingsStore = { viewOnceForwardJid?: string };',
-    'type SettingsStore = { viewOnceForwardJid?: string; messageCensorEnabled?: boolean };'
-  );
-  out = out.replace(
-    'const LID_REPLY_LINK_WINDOW_MS = 15 * 60 * 1000;',
-    'const LID_REPLY_LINK_WINDOW_MS = 15 * 60 * 1000;\nconst MESSAGE_CENSOR_DELAY_MS = 5 * 60 * 1000;'
-  );
-  out = out.replace(
-    'let lastNotificationAt = 0;',
-    'let lastNotificationAt = 0;\nlet censorTimer: NodeJS.Timeout | null = null;'
-  );
+  let out = s;
+  if (!out.includes('seenAt?: number; censoredAt?: number')) {
+    out = out.replace(
+      'type StoredMessage = { jid: string; fromMe: boolean; senderName: string; text: string; at: number };',
+      'type StoredMessage = { jid: string; fromMe: boolean; senderName: string; text: string; at: number; seenAt?: number; censoredAt?: number };'
+    );
+  }
+  if (!out.includes('messageCensorEnabled?: boolean')) {
+    out = out.replace(
+      'type SettingsStore = { viewOnceForwardJid?: string };',
+      'type SettingsStore = { viewOnceForwardJid?: string; messageCensorEnabled?: boolean };'
+    );
+  }
+  if (!out.includes('MESSAGE_CENSOR_DELAY_MS')) {
+    out = out.replace(
+      'const LID_REPLY_LINK_WINDOW_MS = 15 * 60 * 1000;',
+      'const LID_REPLY_LINK_WINDOW_MS = 15 * 60 * 1000;\nconst MESSAGE_CENSOR_DELAY_MS = 5 * 60 * 1000;'
+    );
+  }
+  if (!out.includes('censorTimer: NodeJS.Timeout')) {
+    out = out.replace(
+      'let lastNotificationAt = 0;',
+      'let lastNotificationAt = 0;\nlet censorTimer: NodeJS.Timeout | null = null;'
+    );
+  }
   return out;
 });
 
@@ -202,10 +211,13 @@ function censorCommand(args: string[]): void {
 });
 
 patchOnce('message censor hooks', (s) => {
-  let out = s.replace(
-    'if (ch) chats.set(currentChat, { ...ch, unread: 0 });',
-    'if (ch) chats.set(currentChat, { ...ch, unread: 0 });\n  markMessagesSeenForCensor(currentChat);'
-  );
+  let out = s;
+  if (!out.includes('markMessagesSeenForCensor(currentChat);')) {
+    out = out.replace(
+      'if (ch) chats.set(currentChat, { ...ch, unread: 0 });',
+      'if (ch) chats.set(currentChat, { ...ch, unread: 0 });\n  markMessagesSeenForCensor(currentChat);'
+    );
+  }
   out = out.replace(
     "console.log(chalk.gray('Ketik pesan langsung. b/back kembali. v <media-id> buka foto. /vo untuk anti-viewonce.'));",
     "console.log(chalk.gray('Ketik pesan langsung. b/back kembali. v <media-id> buka foto. /vo anti-viewonce. /sensor privasi.'));"
@@ -214,10 +226,12 @@ patchOnce('message censor hooks', (s) => {
     'for (const m of list) console.log(`${chalk.gray(time(m.at))} ${m.fromMe ? chalk.green(\'kamu\') : chalk.magenta(m.senderName || \'dia\')}: ${m.text}`);',
     'for (const m of list) console.log(`${chalk.gray(time(m.at))} ${m.fromMe ? chalk.green(\'kamu\') : chalk.magenta(m.senderName || \'dia\')}: ${m.censoredAt ? chalk.gray(m.text) : m.text}`);'
   );
-  out = out.replace(
-    "pushMsg({ jid, fromMe: true, senderName: 'kamu', text, at });\n  saveData();",
-    "pushMsg({ jid, fromMe: true, senderName: 'kamu', text, at });\n  markChatRepliedForCensor(jid);\n  saveData();"
-  );
+  if (!out.includes('markChatRepliedForCensor(jid);')) {
+    out = out.replace(
+      "pushMsg({ jid, fromMe: true, senderName: 'kamu', text, at });\n  saveData();",
+      "pushMsg({ jid, fromMe: true, senderName: 'kamu', text, at });\n  markChatRepliedForCensor(jid);\n  saveData();"
+    );
+  }
   out = out.replace(
     '1-10 open | n/p page | s <nama> search | c <nama> contacts | r <no> <pesan> | v <media-id> | /vo | b back | /help',
     '1-10 open | n/p page | s <nama> search | c <nama> contacts | r <no> <pesan> | v <media-id> | /vo | /sensor | b back | /help'
@@ -226,14 +240,18 @@ patchOnce('message censor hooks', (s) => {
     '  /viewonce off | /viewonce list | /viewonce open <id>\n  /clear | /logout | /exit',
     '  /viewonce off | /viewonce list | /viewonce open <id>\n  /sensor status | /sensor on | /sensor off | /sensor now\n  /clear | /logout | /exit'
   );
-  out = out.replace(
-    "if (cmd === '/viewonce' || cmd === '/vo') return viewOnceCommand(args);\n  if (cmd === '/clear') return render();",
-    "if (cmd === '/viewonce' || cmd === '/vo') return viewOnceCommand(args);\n  if (cmd === '/sensor') return censorCommand(args);\n  if (cmd === '/clear') return render();"
-  );
-  out = out.replace(
-    'loadData();\nprocess.on(\'SIGINT\', () => exitApp(0));',
-    'loadData();\ncensorDueMessages();\nscheduleCensorSweep();\nprocess.on(\'SIGINT\', () => exitApp(0));'
-  );
+  if (!out.includes("if (cmd === '/sensor') return censorCommand(args);")) {
+    out = out.replace(
+      "if (cmd === '/viewonce' || cmd === '/vo') return viewOnceCommand(args);\n  if (cmd === '/clear') return render();",
+      "if (cmd === '/viewonce' || cmd === '/vo') return viewOnceCommand(args);\n  if (cmd === '/sensor') return censorCommand(args);\n  if (cmd === '/clear') return render();"
+    );
+  }
+  if (!out.includes('scheduleCensorSweep();\nprocess.on')) {
+    out = out.replace(
+      'loadData();\nprocess.on(\'SIGINT\', () => exitApp(0));',
+      'loadData();\ncensorDueMessages();\nscheduleCensorSweep();\nprocess.on(\'SIGINT\', () => exitApp(0));'
+    );
+  }
   return out;
 });
 
