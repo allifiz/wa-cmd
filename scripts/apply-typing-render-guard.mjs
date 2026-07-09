@@ -16,14 +16,24 @@ function patch(label, from, to, marker) {
   changed = true;
 }
 
-if (!src.includes("import * as readlineCore from 'node:readline';")) {
-  patch(
-    'add readline core import',
-    "import * as readline from 'node:readline/promises';\n",
-    "import * as readline from 'node:readline/promises';\nimport * as readlineCore from 'node:readline';\n",
-    "import * as readlineCore from 'node:readline';"
-  );
+function insertReadlineCoreImport() {
+  if (src.includes("import * as readlineCore from 'node:readline';")) return;
+  const re = /import \* as readline from 'node:readline\/promises';\r?\n/;
+  const match = src.match(re);
+  if (match?.index !== undefined) {
+    const insertAt = match.index + match[0].length;
+    src = `${src.slice(0, insertAt)}import * as readlineCore from 'node:readline';\n${src.slice(insertAt)}`;
+    changed = true;
+    return;
+  }
+  const fallback = src.match(/^#![^\n]*\r?\n/);
+  const line = "import * as readlineCore from 'node:readline';\n";
+  if (fallback) src = `${fallback[0]}${line}${src.slice(fallback[0].length)}`;
+  else src = `${line}${src}`;
+  changed = true;
 }
+
+insertReadlineCoreImport();
 
 patch(
   'add prompt render state',
