@@ -27,29 +27,41 @@ function pushNameMatchesJid(jid: string, pushName?: string): boolean {
   return searchableNames(jid).some((name) => norm(name) === push);
 }
 
-function collectPhoneJidsFromPayload(value: unknown, out = new Set<string>(), seen = new WeakSet<object>(), keyHint = ''): Set<string> {
-  if (!value) return out;
-  if (typeof value === 'string') {
-    const keyLooksLikeIdentity = /jid|participant|sender|remote|pn|user|id/i.test(keyHint);
-    if (!keyLooksLikeIdentity) return out;
-    for (const match of value.matchAll(/\d{7,20}@s\.whatsapp\.net/g)) out.add(jidNormalizedUser(match[0]) ?? match[0]);
-    return out;
-  }
-  if (typeof value !== 'object') return out;
-  if (seen.has(value)) return out;
-  seen.add(value);
-  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-    collectPhoneJidsFromPayload(child, out, seen, key);
-  }
-  return out;
+function phoneJidFromValue(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const match = value.match(/\d{7,20}@s\.whatsapp\.net/);
+  if (!match) return null;
+  const normalized = jidNormalizedUser(match[0]) ?? match[0];
+  return isPhoneJid(normalized) ? normalized : null;
+}
+
+function uniquePhoneJids(values: unknown[]): string[] {
+  return values
+    .map(phoneJidFromValue)
+    .filter(Boolean)
+    .map((jid) => rootJid(jid as string))
+    .filter((jid, i, arr) => isPhoneJid(jid) && arr.indexOf(jid) === i);
 }
 
 function findPayloadPhoneJid(rawMessage?: unknown): string | null {
-  const ids = [...collectPhoneJidsFromPayload(rawMessage)]
-    .map((jid) => rootJid(jid))
-    .filter((jid, i, arr) => isPhoneJid(jid) && arr.indexOf(jid) === i);
-  if (ids.length === 1) return ids[0];
-  const known = ids.filter((jid) => contacts.has(jid) || chats.has(jid));
+  const raw = rawMessage as any;
+  const key = raw?.key ?? {};
+
+  // Penting: jangan scan seluruh payload. Context/quoted message bisa berisi nomor chat lain.
+  // Ambil hanya field identitas sender/participant yang biasa dipakai Baileys.
+  const directCandidates = uniquePhoneJids([
+    key.senderPn,
+    key.participantPn,
+    key.participant,
+    key.remoteJidAlt,
+    key.remoteJidPn,
+    raw?.senderPn,
+    raw?.participantPn,
+    raw?.participant,
+  ]);
+  if (directCandidates.length === 1) return directCandidates[0];
+
+  const known = directCandidates.filter((jid) => contacts.has(jid) || chats.has(jid));
   return known.length === 1 ? known[0] : null;
 }
 
@@ -58,7 +70,8 @@ function findManualLinkedJid(rawJid: string, pushName?: string): string | null {
   const direct = jidLinks.get(id);
   if (direct) {
     const target = rootJid(direct);
-    if (!isLidJid(id) || pushNameMatchesJid(target, pushName) || sameBareNumber(id, target)) return target;
+    if (!isLidJid(id)) return target;
+    if (pushNameMatchesJid(target, pushName) || sameBareNumber(id, target)) return target;
     jidLinks.delete(id);
   }
 
