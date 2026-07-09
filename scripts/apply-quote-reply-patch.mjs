@@ -36,9 +36,20 @@ patch('quote helpers', (s) => {
   const idx = s.indexOf(marker);
   if (idx === -1) return s;
   const block = `
+function isViewOnceMarkerText(text?: string): boolean {
+  return Boolean(text && /view-once/i.test(text));
+}
 function quoteInfoFromRaw(raw: any, fallbackJid: string, fallbackText?: string): any | null {
   const key = raw?.key;
-  const message = raw?.message ?? (fallbackText ? { conversation: fallbackText } : null);
+  const rawMessage = raw?.message;
+  const fallbackIsViewOnceMarker = isViewOnceMarkerText(fallbackText);
+  const rawLooksLikeViewOnce = Boolean(rawMessage && (isViewOnce(rawMessage) || payloadLooksViewOnce(rawMessage)));
+
+  // Penting: untuk view-once, jangan pernah bikin quote palsu berupa teks marker.
+  // Kalau payload asli view-once ada, pakai payload itu. Kalau cuma placeholder, biarkan tidak quoteable.
+  if (fallbackIsViewOnceMarker && !rawLooksLikeViewOnce) return null;
+
+  const message = rawMessage ?? (fallbackText ? { conversation: fallbackText } : null);
   if (!key?.id || !message) return null;
   return {
     key: {
@@ -54,18 +65,28 @@ function quoteInfoFromRaw(raw: any, fallbackJid: string, fallbackText?: string):
 function quoteIndexError(): Error {
   return new Error('Format: q <no> <pesan>. Nomor harus dari pesan yang terlihat di room chat.');
 }
+function unquoteableViewOnceError(): Error {
+  return new Error('View-once ini cuma placeholder dari WhatsApp linked device, bukan payload media asli. CMD tidak bisa quote-reply untuk trigger simpan. Kalau marker berikutnya muncul dengan #v atau payload asli, baru bisa di-quote dari CMD; selain itu quote dari HP dulu.');
+}
 function resolveQuoteMessage(raw: string): StoredMessage {
   if (mode !== 'chat' || !currentChat) throw new Error('Quote reply hanya bisa dipakai di dalam room chat.');
   const index = Number(raw);
   if (!Number.isInteger(index) || index < 1 || index > activeChatMessages.length) throw quoteIndexError();
   const msg = activeChatMessages[index - 1];
-  if (!msg?.quote) throw new Error('Pesan ini belum bisa di-quote. Coba quote pesan baru yang masuk setelah update fitur ini.');
+  if (!msg?.quote) {
+    if (isViewOnceMarkerText(msg?.text)) throw unquoteableViewOnceError();
+    throw new Error('Pesan ini belum bisa di-quote. Coba quote pesan baru yang masuk setelah update fitur ini.');
+  }
   return msg;
 }
 function resolveLastIncomingQuoteMessage(): StoredMessage {
   if (mode !== 'chat' || !currentChat) throw new Error('Quote reply hanya bisa dipakai di dalam room chat.');
-  const msg = [...activeChatMessages].reverse().find((m) => !m.fromMe && m.quote);
-  if (!msg) throw new Error('Belum ada pesan lawan chat yang bisa di-quote di tampilan ini.');
+  const msg = [...activeChatMessages].reverse().find((m) => !m.fromMe);
+  if (!msg) throw new Error('Belum ada pesan lawan chat di tampilan ini.');
+  if (!msg.quote) {
+    if (isViewOnceMarkerText(msg.text)) throw unquoteableViewOnceError();
+    throw new Error('Pesan terakhir dari lawan chat belum bisa di-quote. Pakai q <no> untuk pilih pesan lain yang quoteable.');
+  }
   return msg;
 }
 async function sendQuotedText(sock: ReturnType<typeof makeWASocket>, jidRaw: string, quoted: StoredMessage, text: string): Promise<void> {
@@ -82,7 +103,9 @@ async function sendQuotedText(sock: ReturnType<typeof makeWASocket>, jidRaw: str
 }
 `;
 
-  const existingStart = s.indexOf('function quoteInfoFromRaw(');
+  const existingStart = s.indexOf('function isViewOnceMarkerText(') !== -1
+    ? s.indexOf('function isViewOnceMarkerText(')
+    : s.indexOf('function quoteInfoFromRaw(');
   if (existingStart !== -1) {
     const existingEnd = s.indexOf(marker, existingStart);
     if (existingEnd === -1) return s;
