@@ -16,6 +16,21 @@ function patch(label, from, to, marker) {
   changed = true;
 }
 
+function replaceFirstAfter(label, after, needle, replacement) {
+  const start = src.indexOf(after);
+  if (start === -1) {
+    console.error(`Target patch tidak ketemu: ${label} anchor`);
+    process.exit(1);
+  }
+  const pos = src.indexOf(needle, start);
+  if (pos === -1) {
+    console.error(`Target patch tidak ketemu: ${label}`);
+    process.exit(1);
+  }
+  src = `${src.slice(0, pos)}${replacement}${src.slice(pos + needle.length)}`;
+  changed = true;
+}
+
 patch(
   'quote snapshot state',
   "let pendingQuote: StoredMessage | null = null;",
@@ -49,12 +64,17 @@ patch(
 
 if (src.includes('captureQuoteInputSnapshotBeforeRender(); activeChatMessages = list;')) {
   // already patched
-} else if (src.includes('const list = allMessages.slice(-CHAT_VIEW_LIMIT); activeChatMessages = list;')) {
-  src = src.replace('const list = allMessages.slice(-CHAT_VIEW_LIMIT); activeChatMessages = list;', 'const list = allMessages.slice(-CHAT_VIEW_LIMIT); captureQuoteInputSnapshotBeforeRender(); activeChatMessages = list;');
-  changed = true;
 } else {
-  console.error('Target patch tidak ketemu: render chat active messages assignment');
-  process.exit(1);
+  const compactPattern = /const list = allMessages\.slice\(-CHAT_VIEW_LIMIT\);\s*activeChatMessages = list;/;
+  if (compactPattern.test(src)) {
+    src = src.replace(compactPattern, 'const list = allMessages.slice(-CHAT_VIEW_LIMIT); captureQuoteInputSnapshotBeforeRender(); activeChatMessages = list;');
+    changed = true;
+  } else if (src.indexOf('function renderChat') !== -1 && src.indexOf('activeChatMessages = list;', src.indexOf('function renderChat')) !== -1) {
+    replaceFirstAfter('render chat active messages assignment', 'function renderChat', 'activeChatMessages = list;', 'captureQuoteInputSnapshotBeforeRender(); activeChatMessages = list;');
+  } else {
+    console.error('Target patch tidak ketemu: render chat active messages assignment');
+    process.exit(1);
+  }
 }
 
 if (!src.includes('const quoteLock = quoteInputSnapshotLabel(); if (quoteLock) console.log(chalk.yellow(quoteLock));')) {
@@ -63,6 +83,8 @@ if (!src.includes('const quoteLock = quoteInputSnapshotLabel(); if (quoteLock) c
   if (src.includes(anchor)) {
     src = src.replace(anchor, replacement);
     changed = true;
+  } else if (src.indexOf('function renderChat') !== -1 && src.indexOf("console.log(chalk.gray(uiLine('pesan')));", src.indexOf('function renderChat')) !== -1) {
+    replaceFirstAfter('quote lock render indicator', 'function renderChat', "console.log(chalk.gray(uiLine('pesan')));", "const quoteLock = quoteInputSnapshotLabel(); if (quoteLock) console.log(chalk.yellow(quoteLock)); console.log(chalk.gray(uiLine('pesan')));");
   } else {
     console.error('Target patch tidak ketemu: quote lock render indicator');
     process.exit(1);
