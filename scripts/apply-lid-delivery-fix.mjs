@@ -45,6 +45,12 @@ replace(
   "function repairJidLinksFromHistory(): void { for (const [from, to] of [...jidLinks.entries()]) { const target = rootJid(to); if (isLidJid(from) && isPhoneJid(target)) { jidLinks.delete(from); jidLinks.set(target, from); continue; } if (isLidJid(from) && !isPhoneJid(target) && !target.endsWith('@g.us')) jidLinks.delete(from); } }"
 );
 
+replace(
+  'nullable Baileys pushName',
+  "findLikelyCanonicalForIncoming(rawJid, m.pushName, m as any)",
+  "findLikelyCanonicalForIncoming(rawJid, m.pushName ?? undefined, m as any)"
+);
+
 if (changed) {
   fs.writeFileSync(file, src);
   console.log('patched: LID jadi canonical delivery; nomor dari VCF dipakai buat copy nama kontak.');
