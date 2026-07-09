@@ -8,7 +8,7 @@
     "wa-cmd": "./dist/index.js"
   },
   "scripts": {
-    "prepare:source": "node scripts/apply-lid-delivery-fix.mjs && node scripts/apply-delete-chat-command.mjs && node scripts/apply-notify-fix.mjs && node scripts/apply-typing-render-guard.mjs && node scripts/apply-delete-censored-messages.mjs && node scripts/apply-message-status-patch.mjs",
+    "prepare:source": "node scripts/apply-lid-delivery-fix.mjs && node scripts/apply-delete-chat-command.mjs && node scripts/apply-notify-fix.mjs && node scripts/apply-typing-render-guard.mjs && node scripts/apply-delete-censored-messages.mjs && node scripts/apply-message-status-patch.mjs && node scripts/apply-tui-ux-patch.mjs",
     "dev": "npm run prepare:source && tsx src/index.ts",
     "build": "npm run prepare:source && tsc",
     "start": "node dist/index.js",
@@ -24,6 +24,7 @@
     "fix:typing-render": "node scripts/apply-typing-render-guard.mjs",
     "fix:cleanup-messages": "node scripts/apply-delete-censored-messages.mjs",
     "fix:message-status": "node scripts/apply-message-status-patch.mjs",
+    "fix:tui": "node scripts/apply-tui-ux-patch.mjs",
     "cache:remove": "node scripts/cache-admin.mjs remove",
     "typecheck": "npm run prepare:source && tsc --noEmit"
   },
