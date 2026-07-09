@@ -20,15 +20,16 @@ patch('view-once chat marker helper', (s) => {
   const marker = '\nasync function saveIncomingImage(sock: ReturnType<typeof makeWASocket>, rawMessage: any, jid: string, fromMe: boolean, senderName: string, at: number): Promise<MediaSaveResult | null> {';
   const idx = s.indexOf(marker);
   if (idx === -1) return s;
-  const block = `
-function viewOnceChatMarker(raw?: proto.IMessage | null, senderName = 'user', fromMe = false, item?: MediaItem): string | null {
-  if (item?.kind !== 'view-once-image' && !isViewOnce(raw)) return null;
-  const who = fromMe ? 'kamu' : (senderName.trim() || 'user');
-  const id = item?.kind === 'view-once-image' ? ` + "` #v${item.id}`" + ` : '';
-  return `[${who} kirim view-once${id}]`;
-}
-`;
-  return `${s.slice(0, idx)}${block}${s.slice(idx)}`;
+  const block = [
+    'function viewOnceChatMarker(raw?: proto.IMessage | null, senderName = \'user\', fromMe = false, item?: MediaItem): string | null {',
+    "  if (item?.kind !== 'view-once-image' && !isViewOnce(raw)) return null;",
+    "  const who = fromMe ? 'kamu' : (senderName.trim() || 'user');",
+    "  const id = item?.kind === 'view-once-image' ? ' #v' + item.id : '';",
+    "  return '[' + who + ' kirim view-once' + id + ']';",
+    '}',
+    '',
+  ].join('\n');
+  return `${s.slice(0, idx)}\n${block}${s.slice(idx)}`;
 });
 
 patch('prefer view-once marker in chat text', (s) => {
