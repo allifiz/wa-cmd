@@ -107,10 +107,12 @@ patch('store incoming quote payload', (s) => {
 
 patch('number visible chat messages', (s) => {
   let out = s;
-  out = out.replace(
-    'activeList = listForMode();',
-    'activeChatMessages = [];\n  activeList = listForMode();'
-  );
+  if (!out.includes('activeChatMessages = [];\n  activeList = listForMode();')) {
+    out = out.replace(
+      'activeList = listForMode();',
+      'activeChatMessages = [];\n  activeList = listForMode();'
+    );
+  }
   out = out.replace(
     'for (const m of list) console.log(`${chalk.gray(time(m.at))} ${m.fromMe ? chalk.green(\'kamu\') : chalk.magenta(m.senderName || \'dia\')}: ${m.censoredAt ? chalk.gray(m.text) : m.text}`);',
     "activeChatMessages = list;\n  list.forEach((m, i) => console.log(`${chalk.cyan(`[${i + 1}]`)} ${chalk.gray(time(m.at))} ${m.fromMe ? chalk.green('kamu') : chalk.magenta(m.senderName || 'dia')}: ${m.censoredAt ? chalk.gray(m.text) : m.text}`));"
