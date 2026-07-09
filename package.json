@@ -8,7 +8,7 @@
     "wa-cmd": "./dist/index.js"
   },
   "scripts": {
-    "prepare:source": "node scripts/apply-lid-delivery-fix.mjs && node scripts/apply-cache-root-dedupe-patch.mjs && node scripts/apply-phone-delivery-patch.mjs && node scripts/apply-decode-contact-name-patch.mjs && node scripts/apply-delete-chat-command.mjs && node scripts/apply-notify-fix.mjs && node scripts/apply-typing-render-guard.mjs && node scripts/apply-delete-censored-messages.mjs && node scripts/apply-message-status-patch.mjs && node scripts/apply-tui-ux-patch.mjs && node scripts/apply-quote-snapshot-patch.mjs && node scripts/apply-render-after-command-patch.mjs",
+    "prepare:source": "node scripts/apply-lid-delivery-fix.mjs && node scripts/apply-jid-link-safety-patch.mjs && node scripts/apply-cache-root-dedupe-patch.mjs && node scripts/apply-phone-delivery-patch.mjs && node scripts/apply-decode-contact-name-patch.mjs && node scripts/apply-delete-chat-command.mjs && node scripts/apply-notify-fix.mjs && node scripts/apply-typing-render-guard.mjs && node scripts/apply-delete-censored-messages.mjs && node scripts/apply-message-status-patch.mjs && node scripts/apply-tui-ux-patch.mjs && node scripts/apply-quote-snapshot-patch.mjs && node scripts/apply-render-after-command-patch.mjs",
     "dev": "npm run prepare:source && tsx src/index.ts",
     "build": "npm run prepare:source && tsc",
     "start": "node dist/index.js",
@@ -19,6 +19,7 @@
     "cache:merge-index": "node scripts/cache-merge-index.mjs",
     "cache:prefer-lid": "node scripts/cache-prefer-lid.mjs",
     "fix:lid-delivery": "node scripts/apply-lid-delivery-fix.mjs",
+    "fix:jid-link-safety": "node scripts/apply-jid-link-safety-patch.mjs",
     "fix:cache-root-dedupe": "node scripts/apply-cache-root-dedupe-patch.mjs",
     "fix:phone-delivery": "node scripts/apply-phone-delivery-patch.mjs",
     "fix:decode-contact-name": "node scripts/apply-decode-contact-name-patch.mjs",
