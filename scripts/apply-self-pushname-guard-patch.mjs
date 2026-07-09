@@ -67,10 +67,19 @@ if (!src.includes('!fromMe && !isSelfPushName(name)')) {
   patch('upsertChat ignore self pushName as permanent name', oldUpsert, newUpsert);
 }
 
-const oldMsgOrder = "const senderName = fromMe ? 'kamu' : m.pushName || nameOf(rawJid); const jid = fromMe ? rootJid(rawJid) : findLikelyCanonicalForIncoming(rawJid, m.pushName, m as any);";
-const newMsgOrder = "if (fromMe) rememberSelfPushName(m.pushName); const jid = fromMe ? rootJid(rawJid) : findLikelyCanonicalForIncoming(rawJid, m.pushName, m as any); const senderName = fromMe ? 'kamu' : safePushNameForJid(jid, m.pushName) ?? nameOf(jid);";
+const senderVariants = [
+  "const senderName = fromMe ? 'kamu' : m.pushName || nameOf(rawJid); const jid = fromMe ? rootJid(rawJid) : findLikelyCanonicalForIncoming(rawJid, m.pushName, m as any);",
+  "const senderName = fromMe ? 'kamu' : m.pushName || nameOf(rawJid); const jid = fromMe ? rootJid(rawJid) : findLikelyCanonicalForIncoming(rawJid, m.pushName ?? undefined, m as any);"
+];
+const newMsgOrder = "if (fromMe) rememberSelfPushName(m.pushName); const jid = fromMe ? rootJid(rawJid) : findLikelyCanonicalForIncoming(rawJid, m.pushName ?? undefined, m as any); const senderName = fromMe ? 'kamu' : safePushNameForJid(jid, m.pushName) ?? nameOf(jid);";
 if (!src.includes('safePushNameForJid(jid, m.pushName)')) {
-  patch('message sender name keeps pushName display', oldMsgOrder, newMsgOrder);
+  const found = senderVariants.find((x) => src.includes(x));
+  if (found) {
+    src = src.replace(found, newMsgOrder);
+    changed = true;
+  } else {
+    console.warn('message sender name target tidak ketemu; lanjut tanpa stop.');
+  }
 }
 
 const oldChatName = "const chatName = fromMe ? nameOf(jid) : (contactName(jid) ?? m.pushName ?? nameOf(jid));";
