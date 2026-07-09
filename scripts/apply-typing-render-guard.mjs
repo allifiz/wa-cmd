@@ -23,23 +23,41 @@ patch(
   'let promptActive = false;\nlet renderPending = false;'
 );
 
-patch(
-  'guard render while typing',
-  "function render(): void { lastRender = Date.now(); mode === 'chat' ? renderChat() : renderList(); }",
-  "function render(): void { if (promptActive) { renderPending = true; return; } renderPending = false; lastRender = Date.now(); mode === 'chat' ? renderChat() : renderList(); }\nfunction flushPendingRender(): void { if (!renderPending) return; renderPending = false; render(); }",
-  'function flushPendingRender(): void'
-);
+const smartRender = "function promptLabel(): string { return mode === 'chat' && currentChat ? `${nameOf(currentChat)}${pendingQuote ? ' ↪' : ''}> ` : 'wa-cmd> '; }\nfunction promptHasInput(): boolean { return Boolean((rl as unknown as { line?: string }).line?.length); }\nfunction render(): void { if (promptActive && promptHasInput()) { renderPending = true; return; } renderPending = false; lastRender = Date.now(); mode === 'chat' ? renderChat() : renderList(); if (promptActive) process.stdout.write(chalk.green(promptLabel())); }\nfunction flushPendingRender(): void { if (!renderPending) return; renderPending = false; render(); }";
 
-patch(
-  'prompt loop render flush',
-  "async function promptLoop(sock: ReturnType<typeof makeWASocket>): Promise<void> { render(); while (true) { const label = mode === 'chat' && currentChat ? `${nameOf(currentChat)}${pendingQuote ? ' ↪' : ''}> ` : 'wa-cmd> '; const line = (await rl.question(chalk.green(label))).trim(); if (!line) continue; try { line.startsWith('/') ? await slash(sock, line) : await shortcut(sock, line); } catch (e) { console.log(chalk.red(`Error: ${e instanceof Error ? e.message : String(e)}`)); } } }",
-  "async function promptLoop(sock: ReturnType<typeof makeWASocket>): Promise<void> { render(); while (true) { const label = mode === 'chat' && currentChat ? `${nameOf(currentChat)}${pendingQuote ? ' ↪' : ''}> ` : 'wa-cmd> '; promptActive = true; const line = (await rl.question(chalk.green(label))).trim(); promptActive = false; if (!line) { flushPendingRender(); continue; } try { line.startsWith('/') ? await slash(sock, line) : await shortcut(sock, line); } catch (e) { console.log(chalk.red(`Error: ${e instanceof Error ? e.message : String(e)}`)); } flushPendingRender(); } }",
-  'promptActive = true; const line = (await rl.question'
-);
+if (src.includes("function render(): void { if (promptActive) { renderPending = true; return; } renderPending = false; lastRender = Date.now(); mode === 'chat' ? renderChat() : renderList(); }\nfunction flushPendingRender(): void { if (!renderPending) return; renderPending = false; render(); }")) {
+  src = src.replace(
+    "function render(): void { if (promptActive) { renderPending = true; return; } renderPending = false; lastRender = Date.now(); mode === 'chat' ? renderChat() : renderList(); }\nfunction flushPendingRender(): void { if (!renderPending) return; renderPending = false; render(); }",
+    smartRender
+  );
+  changed = true;
+} else {
+  patch(
+    'guard render while typing',
+    "function render(): void { lastRender = Date.now(); mode === 'chat' ? renderChat() : renderList(); }",
+    smartRender,
+    'function promptHasInput(): boolean'
+  );
+}
+
+if (src.includes("async function promptLoop(sock: ReturnType<typeof makeWASocket>): Promise<void> { render(); while (true) { const label = mode === 'chat' && currentChat ? `${nameOf(currentChat)}${pendingQuote ? ' ↪' : ''}> ` : 'wa-cmd> '; promptActive = true; const line = (await rl.question(chalk.green(label))).trim(); promptActive = false; if (!line) { flushPendingRender(); continue; } try { line.startsWith('/') ? await slash(sock, line) : await shortcut(sock, line); } catch (e) { console.log(chalk.red(`Error: ${e instanceof Error ? e.message : String(e)}`)); } flushPendingRender(); } }")) {
+  src = src.replace(
+    "async function promptLoop(sock: ReturnType<typeof makeWASocket>): Promise<void> { render(); while (true) { const label = mode === 'chat' && currentChat ? `${nameOf(currentChat)}${pendingQuote ? ' ↪' : ''}> ` : 'wa-cmd> '; promptActive = true; const line = (await rl.question(chalk.green(label))).trim(); promptActive = false; if (!line) { flushPendingRender(); continue; } try { line.startsWith('/') ? await slash(sock, line) : await shortcut(sock, line); } catch (e) { console.log(chalk.red(`Error: ${e instanceof Error ? e.message : String(e)}`)); } flushPendingRender(); } }",
+    "async function promptLoop(sock: ReturnType<typeof makeWASocket>): Promise<void> { render(); while (true) { promptActive = true; const line = (await rl.question(chalk.green(promptLabel()))).trim(); promptActive = false; if (!line) { flushPendingRender(); continue; } try { line.startsWith('/') ? await slash(sock, line) : await shortcut(sock, line); } catch (e) { console.log(chalk.red(`Error: ${e instanceof Error ? e.message : String(e)}`)); } flushPendingRender(); } }"
+  );
+  changed = true;
+} else {
+  patch(
+    'prompt loop render flush',
+    "async function promptLoop(sock: ReturnType<typeof makeWASocket>): Promise<void> { render(); while (true) { const label = mode === 'chat' && currentChat ? `${nameOf(currentChat)}${pendingQuote ? ' ↪' : ''}> ` : 'wa-cmd> '; const line = (await rl.question(chalk.green(label))).trim(); if (!line) continue; try { line.startsWith('/') ? await slash(sock, line) : await shortcut(sock, line); } catch (e) { console.log(chalk.red(`Error: ${e instanceof Error ? e.message : String(e)}`)); } } }",
+    "async function promptLoop(sock: ReturnType<typeof makeWASocket>): Promise<void> { render(); while (true) { promptActive = true; const line = (await rl.question(chalk.green(promptLabel()))).trim(); promptActive = false; if (!line) { flushPendingRender(); continue; } try { line.startsWith('/') ? await slash(sock, line) : await shortcut(sock, line); } catch (e) { console.log(chalk.red(`Error: ${e instanceof Error ? e.message : String(e)}`)); } flushPendingRender(); } }",
+    'await rl.question(chalk.green(promptLabel()))'
+  );
+}
 
 if (changed) {
   fs.writeFileSync(file, src);
-  console.log('patched: render is deferred while typing.');
+  console.log('patched: render refreshes immediately only when prompt input is empty.');
 } else {
   console.log('typing render guard already patched.');
 }
