@@ -25,6 +25,16 @@ function replaceFirstAfter(label, after, needle, replacement) {
   return true;
 }
 
+function replaceInPromptLoop(label, needle, replacement) {
+  const start = src.indexOf('async function promptLoop');
+  if (start === -1) return false;
+  const pos = src.indexOf(needle, start);
+  if (pos === -1) return false;
+  src = `${src.slice(0, pos)}${replacement}${src.slice(pos + needle.length)}`;
+  changed = true;
+  return true;
+}
+
 patch(
   'quote snapshot state',
   "let pendingQuote: StoredMessage | null = null;",
@@ -82,24 +92,27 @@ if (!src.includes('quoteInputSnapshotLabel(); if (quoteLock)')) {
   if (!inserted) console.warn('Quote lock indicator tidak disisipkan, tapi snapshot quote tetap aktif.');
 }
 
-if (src.includes('clearQuoteInputSnapshot(); flushPendingRender(); continue;')) {
+if (src.includes('clearQuoteInputSnapshot(); flushPendingRender(); continue;') || src.includes('clearQuoteInputSnapshot(); render(); continue;')) {
   // already patched
 } else if (src.includes('if (!line) { flushPendingRender(); continue; }')) {
   src = src.replace('if (!line) { flushPendingRender(); continue; }', 'if (!line) { clearQuoteInputSnapshot(); flushPendingRender(); continue; }');
   changed = true;
-} else {
-  console.error('Target patch tidak ketemu: prompt loop empty line clear');
-  process.exit(1);
-}
-
-if (src.includes('clearQuoteInputSnapshot(); flushPendingRender(); } }')) {
-  // already patched
-} else if (src.includes('} catch (e) { console.log(chalk.red(`Error: ${e instanceof Error ? e.message : String(e)}`)); } flushPendingRender(); } }')) {
-  src = src.replace('} catch (e) { console.log(chalk.red(`Error: ${e instanceof Error ? e.message : String(e)}`)); } flushPendingRender(); } }', '} catch (e) { console.log(chalk.red(`Error: ${e instanceof Error ? e.message : String(e)}`)); } clearQuoteInputSnapshot(); flushPendingRender(); } }');
+} else if (src.includes('if (!line) { render(); continue; }')) {
+  src = src.replace('if (!line) { render(); continue; }', 'if (!line) { clearQuoteInputSnapshot(); render(); continue; }');
   changed = true;
 } else {
-  console.error('Target patch tidak ketemu: prompt loop post command clear');
-  process.exit(1);
+  console.warn('Prompt loop empty-line clear tidak ketemu; lanjut tanpa stop.');
+}
+
+const catchLine = '} catch (e) { console.log(chalk.red(`Error: ${e instanceof Error ? e.message : String(e)}`)); }';
+if (src.includes('clearQuoteInputSnapshot(); flushPendingRender(); } }') || src.includes('clearQuoteInputSnapshot(); render(); } }')) {
+  // already patched
+} else if (replaceInPromptLoop('prompt loop post command clear', `${catchLine} flushPendingRender();`, `${catchLine} clearQuoteInputSnapshot(); flushPendingRender();`)) {
+  // patched
+} else if (replaceInPromptLoop('prompt loop post command clear', `${catchLine} render();`, `${catchLine} clearQuoteInputSnapshot(); render();`)) {
+  // patched
+} else {
+  console.warn('Prompt loop post-command clear tidak ketemu; lanjut tanpa stop.');
 }
 
 if (changed) {
