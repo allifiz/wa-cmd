@@ -18,17 +18,11 @@ function patch(label, from, to, marker) {
 
 function replaceFirstAfter(label, after, needle, replacement) {
   const start = src.indexOf(after);
-  if (start === -1) {
-    console.error(`Target patch tidak ketemu: ${label} anchor`);
-    process.exit(1);
-  }
-  const pos = src.indexOf(needle, start);
-  if (pos === -1) {
-    console.error(`Target patch tidak ketemu: ${label}`);
-    process.exit(1);
-  }
+  const pos = start >= 0 ? src.indexOf(needle, start) : -1;
+  if (pos === -1) return false;
   src = `${src.slice(0, pos)}${replacement}${src.slice(pos + needle.length)}`;
   changed = true;
+  return true;
 }
 
 patch(
@@ -41,7 +35,7 @@ patch(
 const helpers = "function quoteIndexError(): Error { return new Error('Format: q <no> <pesan>. Nomor harus dari pesan yang terlihat di room chat.'); }\nfunction quoteIndexFromPromptLine(line = promptState().line): number | null { const match = line.trim().match(/^(?:q|qr|reply|\\/reply|\\/quote)\\s+(\\d+)(?:\\s|$)/i); if (!match) return null; const index = Number(match[1]); return Number.isInteger(index) && index >= 1 ? index : null; }\nfunction captureQuoteInputSnapshotBeforeRender(): void { if (mode !== 'chat' || !currentChat || !promptActive || !promptHasInput()) { quoteInputSnapshot = null; return; } const index = quoteIndexFromPromptLine(); if (!index) { quoteInputSnapshot = null; return; } const chat = rootJid(currentChat); if (quoteInputSnapshot?.chat === chat && quoteInputSnapshot.index === index) return; const message = activeChatMessages[index - 1]; if (message) quoteInputSnapshot = { chat, index, message }; }\nfunction snapshotQuoteMessage(index: number): StoredMessage | null { if (!quoteInputSnapshot || !currentChat) return null; if (quoteInputSnapshot.chat !== rootJid(currentChat) || quoteInputSnapshot.index !== index) return null; return quoteInputSnapshot.message; }\nfunction quoteInputSnapshotLabel(): string | null { if (!quoteInputSnapshot || !currentChat || quoteInputSnapshot.chat !== rootJid(currentChat)) return null; const m = quoteInputSnapshot.message; const who = m.fromMe ? 'kamu' : (m.senderName || 'dia'); return `Quote lock [${String(quoteInputSnapshot.index).padStart(2, '0')}] → ${who}: ${short(m.text.replace(/[\\r\\n]+/g, ' '), 72)}`; }\nfunction clearQuoteInputSnapshot(): void { quoteInputSnapshot = null; }";
 
 if (src.includes('function quoteInputSnapshotLabel(): string | null')) {
-  // already has indicator helper
+  // already has helper
 } else if (src.includes('function captureQuoteInputSnapshotBeforeRender(): void')) {
   const start = src.indexOf('function quoteIndexError(): Error');
   const end = src.indexOf('function unquoteableViewOnceError(): Error', start);
@@ -62,14 +56,10 @@ patch(
   'snapshotQuoteMessage(index) ?? activeChatMessages[index - 1]'
 );
 
-// Capture the selected quote before any redraw changes activeChatMessages.
 if (src.includes('captureQuoteInputSnapshotBeforeRender(); renderPending = false;')) {
-  // already patched in render wrapper
+  // already patched
 } else if (src.includes('function render(): void { const state = promptActive && promptHasInput() ? promptState() : undefined; renderPending = false;')) {
-  src = src.replace(
-    'function render(): void { const state = promptActive && promptHasInput() ? promptState() : undefined; renderPending = false;',
-    'function render(): void { const state = promptActive && promptHasInput() ? promptState() : undefined; captureQuoteInputSnapshotBeforeRender(); renderPending = false;'
-  );
+  src = src.replace('function render(): void { const state = promptActive && promptHasInput() ? promptState() : undefined; renderPending = false;', 'function render(): void { const state = promptActive && promptHasInput() ? promptState() : undefined; captureQuoteInputSnapshotBeforeRender(); renderPending = false;');
   changed = true;
 } else if (src.includes('function render(): void { renderPending = false;')) {
   src = src.replace('function render(): void { renderPending = false;', 'function render(): void { captureQuoteInputSnapshotBeforeRender(); renderPending = false;');
@@ -82,26 +72,14 @@ if (src.includes('captureQuoteInputSnapshotBeforeRender(); renderPending = false
   process.exit(1);
 }
 
-// Older versions captured inside renderChat; newer versions use render(). If it is already present, leave it.
-if (!src.includes('captureQuoteInputSnapshotBeforeRender(); activeChatMessages = list;')) {
-  const compactPattern = /const list = allMessages\.slice\(-CHAT_VIEW_LIMIT\);\s*activeChatMessages = list;/;
-  if (compactPattern.test(src)) {
-    src = src.replace(compactPattern, 'const list = allMessages.slice(-CHAT_VIEW_LIMIT); activeChatMessages = list;');
-  }
-}
-
-if (!src.includes('const quoteLock = quoteInputSnapshotLabel(); if (quoteLock) console.log(chalk.yellow(quoteLock));')) {
-  const anchor = "if (pendingQuote) console.log(chalk.yellow(`Replying → ${short(quotePreview(pendingQuote.quote) ?? pendingQuote.text, uiWidth() - 12)}`)); console.log(chalk.gray(uiLine('pesan')));";
-  const replacement = "if (pendingQuote) console.log(chalk.yellow(`Replying → ${short(quotePreview(pendingQuote.quote) ?? pendingQuote.text, uiWidth() - 12)}`)); const quoteLock = quoteInputSnapshotLabel(); if (quoteLock) console.log(chalk.yellow(quoteLock)); console.log(chalk.gray(uiLine('pesan')));";
-  if (src.includes(anchor)) {
-    src = src.replace(anchor, replacement);
-    changed = true;
-  } else if (src.indexOf('function renderChat') !== -1 && src.indexOf("console.log(chalk.gray(uiLine('pesan')));", src.indexOf('function renderChat')) !== -1) {
-    replaceFirstAfter('quote lock render indicator', 'function renderChat', "console.log(chalk.gray(uiLine('pesan')));", "const quoteLock = quoteInputSnapshotLabel(); if (quoteLock) console.log(chalk.yellow(quoteLock)); console.log(chalk.gray(uiLine('pesan')));");
-  } else {
-    console.error('Target patch tidak ketemu: quote lock render indicator');
-    process.exit(1);
-  }
+if (!src.includes('quoteInputSnapshotLabel(); if (quoteLock)')) {
+  const inserted = replaceFirstAfter(
+    'quote lock render indicator',
+    'function renderChat',
+    "console.log(chalk.gray(uiLine('pesan')));",
+    "const quoteLock = quoteInputSnapshotLabel(); if (quoteLock) console.log(chalk.yellow(quoteLock)); console.log(chalk.gray(uiLine('pesan')));"
+  );
+  if (!inserted) console.warn('Quote lock indicator tidak disisipkan, tapi snapshot quote tetap aktif.');
 }
 
 if (src.includes('clearQuoteInputSnapshot(); flushPendingRender(); continue;')) {
