@@ -18,6 +18,7 @@
     "cache:merge-index": "node scripts/cache-merge-index.mjs",
     "cache:prefer-lid": "node scripts/cache-prefer-lid.mjs",
     "fix:lid-delivery": "node scripts/apply-lid-delivery-fix.mjs",
+    "fix:delete-chat": "node scripts/apply-delete-chat-command.mjs",
     "cache:remove": "node scripts/cache-admin.mjs remove",
     "typecheck": "tsc --noEmit"
   },
