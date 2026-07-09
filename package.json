@@ -15,6 +15,7 @@
     "notify:test": "node scripts/test-notify.mjs",
     "cache:list": "node scripts/cache-admin.mjs list",
     "cache:merge": "node scripts/cache-admin.mjs merge",
+    "cache:merge-index": "node scripts/cache-merge-index.mjs",
     "cache:remove": "node scripts/cache-admin.mjs remove",
     "typecheck": "tsc --noEmit"
   },
