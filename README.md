@@ -346,8 +346,8 @@ npm run cache:merge -- <from> <to>
 Contoh:
 
 ```bash
-npm run cache:merge -- Sin sayang
-npm run cache:merge -- "154202831605893@lid" "6285759907854@s.whatsapp.net"
+npm run cache:merge -- orang 1
+npm run cache:merge -- "xxxxx@lid" "xxxxxxx@s.whatsapp.net"
 ```
 
 Hapus cache lokal chat tertentu:
