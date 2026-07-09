@@ -15,6 +15,13 @@ function patchOnce(label, fn) {
   }
 }
 
+patchOnce('repair malformed message censor regex', (s) => {
+  return s.replace(
+    /text\.replace\(\/\[[\r\n]+]\+\/g, ' '\)\.trim\(\)/g,
+    "text.replace(/[\\r\\n]+/g, ' ').trim()"
+  );
+});
+
 patchOnce('node-notifier import', (s) => {
   if (s.includes("createRequire(import.meta.url)") || s.includes("node-notifier")) return s;
   return s.replace(
@@ -97,9 +104,9 @@ patchOnce('message censor engine', (s) => {
 function messageCensorEnabled(): boolean { return Boolean(settings.messageCensorEnabled); }
 function isTerminalCensored(m: StoredMessage): boolean { return Boolean(m.censoredAt) || m.text.startsWith('[░░ SENSOR'); }
 function terminalCensorText(text: string): string {
-  const normalized = text.replace(/[\r\n]+/g, ' ').trim();
+  const normalized = text.replace(/[\\r\\n]+/g, ' ').trim();
   const blocks = Math.min(32, Math.max(8, Array.from(normalized).length || 8));
-  return \`[░░ SENSOR ░░] \${'█'.repeat(blocks)}\`;
+  return '[░░ SENSOR ░░] ' + '█'.repeat(blocks);
 }
 function refreshChatPreview(jidRaw: string): void {
   const jid = rootJid(jidRaw);
@@ -176,7 +183,7 @@ function markChatRepliedForCensor(jidRaw: string): void {
 }
 function censorStatus(): void {
   const state = messageCensorEnabled() ? chalk.green('ON') : chalk.yellow('OFF');
-  console.log(\`Sensor message: \${state} \${chalk.gray('(delay 5 menit setelah chat dilihat/dibalas)')}\`);
+  console.log('Sensor message: ' + state + ' ' + chalk.gray('(delay 5 menit setelah chat dilihat/dibalas)'));
 }
 function censorCommand(args: string[]): void {
   const sub = args.shift()?.toLowerCase() ?? 'status';
