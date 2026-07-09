@@ -62,18 +62,31 @@ patch(
   'snapshotQuoteMessage(index) ?? activeChatMessages[index - 1]'
 );
 
-if (src.includes('captureQuoteInputSnapshotBeforeRender(); activeChatMessages = list;')) {
-  // already patched
+// Capture the selected quote before any redraw changes activeChatMessages.
+if (src.includes('captureQuoteInputSnapshotBeforeRender(); renderPending = false;')) {
+  // already patched in render wrapper
+} else if (src.includes('function render(): void { const state = promptActive && promptHasInput() ? promptState() : undefined; renderPending = false;')) {
+  src = src.replace(
+    'function render(): void { const state = promptActive && promptHasInput() ? promptState() : undefined; renderPending = false;',
+    'function render(): void { const state = promptActive && promptHasInput() ? promptState() : undefined; captureQuoteInputSnapshotBeforeRender(); renderPending = false;'
+  );
+  changed = true;
+} else if (src.includes('function render(): void { renderPending = false;')) {
+  src = src.replace('function render(): void { renderPending = false;', 'function render(): void { captureQuoteInputSnapshotBeforeRender(); renderPending = false;');
+  changed = true;
+} else if (src.includes('function render(): void { lastRender = Date.now();')) {
+  src = src.replace('function render(): void { lastRender = Date.now();', 'function render(): void { captureQuoteInputSnapshotBeforeRender(); lastRender = Date.now();');
+  changed = true;
 } else {
+  console.error('Target patch tidak ketemu: render wrapper quote snapshot');
+  process.exit(1);
+}
+
+// Older versions captured inside renderChat; newer versions use render(). If it is already present, leave it.
+if (!src.includes('captureQuoteInputSnapshotBeforeRender(); activeChatMessages = list;')) {
   const compactPattern = /const list = allMessages\.slice\(-CHAT_VIEW_LIMIT\);\s*activeChatMessages = list;/;
   if (compactPattern.test(src)) {
-    src = src.replace(compactPattern, 'const list = allMessages.slice(-CHAT_VIEW_LIMIT); captureQuoteInputSnapshotBeforeRender(); activeChatMessages = list;');
-    changed = true;
-  } else if (src.indexOf('function renderChat') !== -1 && src.indexOf('activeChatMessages = list;', src.indexOf('function renderChat')) !== -1) {
-    replaceFirstAfter('render chat active messages assignment', 'function renderChat', 'activeChatMessages = list;', 'captureQuoteInputSnapshotBeforeRender(); activeChatMessages = list;');
-  } else {
-    console.error('Target patch tidak ketemu: render chat active messages assignment');
-    process.exit(1);
+    src = src.replace(compactPattern, 'const list = allMessages.slice(-CHAT_VIEW_LIMIT); activeChatMessages = list;');
   }
 }
 
