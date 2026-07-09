@@ -16,6 +16,14 @@ function patch(label, from, to, marker) {
   changed = true;
 }
 
+function patchOptional(label, from, to, marker) {
+  if (src.includes(to) || (marker && src.includes(marker))) return true;
+  if (!src.includes(from)) return false;
+  src = src.replace(from, to);
+  changed = true;
+  return true;
+}
+
 patch(
   'mergeJidData contact copy',
   "function mergeJidData(fromRaw: string, toRaw: string): string { const from = jidNormalizedUser(fromRaw); const to = jidNormalizedUser(toRaw); if (!from || !to || from === to) return to ?? from ?? fromRaw; const canonical = rootJid(to); if (from === canonical) return canonical; jidLinks.set(from, canonical); const fromChat = chats.get(from); const toChat = chats.get(canonical); if (fromChat || toChat) { const newest = !toChat || (fromChat && fromChat.lastAt > toChat.lastAt) ? fromChat : toChat; const preferredName = contactName(canonical) ?? aliasOf(canonical)?.replace(/^/, '@') ?? toChat?.name ?? fromChat?.name ?? canonical; chats.set(canonical, { jid: canonical, name: preferredName, lastMessage: newest?.lastMessage ?? '', lastAt: newest?.lastAt ?? Date.now(), unread: (toChat?.unread ?? 0) + (fromChat?.unread ?? 0) }); chats.delete(from); } const fromMsgs = messages.get(from) ?? []; if (fromMsgs.length) { messages.set(canonical, dedupeMessageList([...(messages.get(canonical) ?? []), ...fromMsgs.map((m) => ({ ...m, jid: canonical }))])); messages.delete(from); } for (const item of media.values()) if (item.jid === from) item.jid = canonical; for (const [alias, jid] of Object.entries(aliases)) if (jid === from) aliases[alias] = canonical; for (const [jid, name] of Object.entries(localNames)) if (jid === from) { localNames[canonical] = localNames[canonical] ?? name; delete localNames[jid]; } if (settings.viewOnceForwardJid === from) settings.viewOnceForwardJid = canonical; if (currentChat === from) currentChat = canonical; return canonical; }",
@@ -44,12 +52,16 @@ patch(
   'if (payloadPhone) return mergeJidData(payloadPhone, id);'
 );
 
-patch(
-  'repair old lid-phone links',
-  "function repairJidLinksFromHistory(): void { for (const [from, to] of [...jidLinks.entries()]) { if (!isLidJid(from)) continue; const target = rootJid(to); if (!isPhoneJid(target) && !target.endsWith('@g.us')) jidLinks.delete(from); } }",
-  "function repairJidLinksFromHistory(): void { for (const [from, to] of [...jidLinks.entries()]) { const target = rootJid(to); if (isLidJid(from) && isPhoneJid(target)) { jidLinks.delete(from); jidLinks.set(target, from); continue; } if (isLidJid(from) && !isPhoneJid(target) && !target.endsWith('@g.us')) jidLinks.delete(from); } }",
-  'jidLinks.set(target, from); continue;'
-);
+if (!src.includes('jidLinks.set(target, from); continue;')) {
+  const oldRepair = "function repairJidLinksFromHistory(): void { for (const [from, to] of [...jidLinks.entries()]) { if (!isLidJid(from)) continue; const target = rootJid(to); if (!isPhoneJid(target) && !target.endsWith('@g.us')) jidLinks.delete(from); } }";
+  const newRepair = "function repairJidLinksFromHistory(): void { for (const [from, to] of [...jidLinks.entries()]) { const target = rootJid(to); if (isLidJid(from) && isPhoneJid(target)) { jidLinks.delete(from); jidLinks.set(target, from); continue; } if (isLidJid(from) && !isPhoneJid(target) && !target.endsWith('@g.us')) jidLinks.delete(from); } }";
+  if (src.includes(oldRepair)) {
+    src = src.replace(oldRepair, newRepair);
+    changed = true;
+  } else {
+    console.warn('repair old lid-phone links target tidak ketemu; lanjut karena safety patch akan repair nanti.');
+  }
+}
 
 patch(
   'nullable Baileys pushName',
