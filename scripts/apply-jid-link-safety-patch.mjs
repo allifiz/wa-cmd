@@ -6,15 +6,16 @@ const file = path.join(process.cwd(), 'src', 'index.ts');
 let src = fs.readFileSync(file, 'utf8');
 let changed = false;
 
-const oldText = "function repairJidLinksFromHistory(): void { for (const [from, to] of [...jidLinks.entries()]) { if (!isLidJid(from)) continue; const target = rootJid(to); if (!isPhoneJid(target) && !target.endsWith('@g.us')) jidLinks.delete(from); } }";
 const newText = "function repairJidLinksFromHistory(): void { for (const [from, to] of [...jidLinks.entries()]) { if (!isLidJid(from)) continue; const target = rootJid(to); const fromBare = from.replace('@lid', ''); const targetBare = target.replace('@s.whatsapp.net', '').replace('@lid', ''); if (isPhoneJid(target) && fromBare === targetBare) { jidLinks.delete(from); continue; } if (!isPhoneJid(target) && !target.endsWith('@g.us')) jidLinks.delete(from); } }";
 
 if (!src.includes('fromBare === targetBare')) {
-  if (!src.includes(oldText)) {
+  const start = src.indexOf('function repairJidLinksFromHistory(): void');
+  const end = start >= 0 ? src.indexOf('function unwrapMessage', start) : -1;
+  if (start === -1 || end === -1 || end <= start) {
     console.error('Target patch tidak ketemu: bad numeric LID link repair');
     process.exit(1);
   }
-  src = src.replace(oldText, newText);
+  src = `${src.slice(0, start)}${newText}\n${src.slice(end)}`;
   changed = true;
 }
 
