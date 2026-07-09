@@ -24,7 +24,9 @@ function replaceOptional(from, to) {
   if (src.includes(from)) {
     src = src.replace(from, to);
     changed = true;
+    return true;
   }
+  return false;
 }
 
 const deleteLocalChatFn = "function deleteLocalChat(targetRaw: string): void { const target = targetRaw.trim() || '.'; const jid = resolveTarget(target); const label = nameOf(jid); chats.delete(jid); messages.delete(jid); for (const [id, item] of [...media.entries()]) if (item.jid === jid) media.delete(id); for (const [from, to] of [...jidLinks.entries()]) if (from === jid || to === jid) jidLinks.delete(from); for (const [alias, aliasJid] of Object.entries(aliases)) if (aliasJid === jid || rootJid(aliasJid) === jid) delete aliases[alias]; delete localNames[jid]; if (settings.viewOnceForwardJid === jid) delete settings.viewOnceForwardJid; if (currentChat === jid) { currentChat = null; mode = 'inbox'; pendingQuote = null; } saveData(); console.log(chalk.yellow(`Deleted local chat cache: ${label} (${jid})`)); render(); }";
@@ -40,9 +42,28 @@ if (!src.includes('function deleteLocalChat(')) {
 }
 
 if (!src.includes("cmd === '/delete'")) {
-  const old = "return linkJids(from, to); } if (cmd === '/close' || cmd === '/back')";
-  const replacement = "return linkJids(from, to); } if (cmd === '/delete' || cmd === '/del' || cmd === '/remove' || cmd === '/rm') { const target = args.join(' '); if (!target && !currentChat) throw new Error('Format: /delete <target>. Contoh: /delete 3'); return deleteLocalChat(target || '.'); } if (cmd === '/close' || cmd === '/back')";
-  replace('slash delete command', old, replacement);
+  const deleteCmd = "if (cmd === '/delete' || cmd === '/del' || cmd === '/remove' || cmd === '/rm') { const target = args.join(' '); if (!target && !currentChat) throw new Error('Format: /delete <target>. Contoh: /delete 3'); return deleteLocalChat(target || '.'); } ";
+  const patterns = [
+    {
+      from: "return linkJids(from, to); } if (cmd === '/close' || cmd === '/back')",
+      to: `return linkJids(from, to); } ${deleteCmd}if (cmd === '/close' || cmd === '/back')`,
+    },
+    {
+      from: "return unmarkSelfChat(target); } if (cmd === '/close' || cmd === '/back')",
+      to: `return unmarkSelfChat(target); } ${deleteCmd}if (cmd === '/close' || cmd === '/back')`,
+    },
+    {
+      from: "if (cmd === '/close' || cmd === '/back')",
+      to: `${deleteCmd}if (cmd === '/close' || cmd === '/back')`,
+    },
+  ];
+  const hit = patterns.find((x) => src.includes(x.from));
+  if (hit) {
+    src = src.replace(hit.from, hit.to);
+    changed = true;
+  } else {
+    console.warn('slash delete command target tidak ketemu; lanjut tanpa stop.');
+  }
 }
 
 if (!src.includes("lower.startsWith('d ')")) {
