@@ -17,6 +17,7 @@
     "cache:merge": "node scripts/cache-admin.mjs merge",
     "cache:merge-index": "node scripts/cache-merge-index.mjs",
     "cache:prefer-lid": "node scripts/cache-prefer-lid.mjs",
+    "fix:lid-delivery": "node scripts/apply-lid-delivery-fix.mjs",
     "cache:remove": "node scripts/cache-admin.mjs remove",
     "typecheck": "tsc --noEmit"
   },
