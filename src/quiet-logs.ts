@@ -3,6 +3,7 @@ const NOISY_LOG_PATTERNS = [
   'Closing session:',
   'SessionEntry {',
   'Failed to decrypt message with any known session',
+  'Decrypted message with closed session',
   'Session error:Error: Bad MAC',
   'Error: Bad MAC',
   'at Object.verifyMAC',
