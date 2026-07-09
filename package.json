@@ -1,6 +1,6 @@
 {
   "name": "wa-cmd",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Lightweight WhatsApp terminal client powered by Baileys.",
   "type": "module",
   "main": "dist/index.js",
@@ -8,9 +8,8 @@
     "wa-cmd": "./dist/index.js"
   },
   "scripts": {
-    "patch:runtime": "node scripts/apply-runtime-patches.mjs && node scripts/apply-safe-lid-patch.mjs && node scripts/apply-local-name-patch.mjs && node scripts/apply-chat-view-patch.mjs && node scripts/apply-quote-reply-patch.mjs && node scripts/apply-view-once-chat-marker-patch.mjs",
-    "dev": "npm run patch:runtime && tsx src/index.ts",
-    "build": "npm run patch:runtime && tsc",
+    "dev": "tsx src/index.ts",
+    "build": "tsc",
     "start": "node dist/index.js",
     "import-vcf": "tsx src/import-vcf.ts",
     "notify:test": "node scripts/test-notify.mjs",
