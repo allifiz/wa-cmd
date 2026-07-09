@@ -359,7 +359,7 @@ npm run cache:merge -- <from> <to>
 Contoh:
 
 ```bash
-npm run cache:merge -- Sin sayang
+npm run cache:merge -- asw bapak
 npm run cache:merge -- "xxxxx@lid" "xxxxxxx@s.whatsapp.net"
 ```
 
