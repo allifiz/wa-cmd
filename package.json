@@ -8,8 +8,9 @@
     "wa-cmd": "./dist/index.js"
   },
   "scripts": {
-    "dev": "tsx src/index.ts",
-    "build": "tsc",
+    "prepare:source": "node scripts/apply-lid-delivery-fix.mjs && node scripts/apply-delete-chat-command.mjs && node scripts/apply-notify-fix.mjs",
+    "dev": "npm run prepare:source && tsx src/index.ts",
+    "build": "npm run prepare:source && tsc",
     "start": "node dist/index.js",
     "import-vcf": "tsx src/import-vcf.ts",
     "notify:test": "node scripts/test-notify.mjs",
@@ -21,7 +22,7 @@
     "fix:delete-chat": "node scripts/apply-delete-chat-command.mjs",
     "fix:notify": "node scripts/apply-notify-fix.mjs",
     "cache:remove": "node scripts/cache-admin.mjs remove",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "npm run prepare:source && tsc --noEmit"
   },
   "keywords": [
     "whatsapp",
