@@ -8,7 +8,7 @@
     "wa-cmd": "./dist/index.js"
   },
   "scripts": {
-    "patch:runtime": "node scripts/apply-runtime-patches.mjs && node scripts/apply-safe-lid-patch.mjs && node scripts/apply-local-name-patch.mjs",
+    "patch:runtime": "node scripts/apply-runtime-patches.mjs && node scripts/apply-safe-lid-patch.mjs && node scripts/apply-local-name-patch.mjs && node scripts/apply-chat-view-patch.mjs",
     "dev": "npm run patch:runtime && tsx src/index.ts",
     "build": "npm run patch:runtime && tsc",
     "start": "node dist/index.js",
